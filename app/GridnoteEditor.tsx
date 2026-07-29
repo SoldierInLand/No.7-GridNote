@@ -43,7 +43,6 @@ const initialNotebook: Notebook = {
   id: "gridnote-welcome",
   title: "Field Notes",
   activePageId: "page-garden",
-  updatedAt: "",
   assets: [],
   pages: [
     {

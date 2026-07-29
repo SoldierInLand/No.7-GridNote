@@ -91,5 +91,5 @@ export interface Notebook {
   activePageId: string;
   pages: NotebookPage[];
   assets: AssetRef[];
-  updatedAt: string;
+  updatedAt?: string;
 }
