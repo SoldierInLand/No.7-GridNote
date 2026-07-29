@@ -426,6 +426,62 @@ button:disabled {
   outline: 0;
 }
 
+.image-editor {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background: #eef1f4;
+}
+
+.image-editor > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-editor > span {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  color: #8792a2;
+  font-size: 11px;
+}
+
+.image-editor label {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  color: #687589;
+  background: #f8fafbe8;
+  border: 1px solid #d9e0e8;
+  border-radius: 7px;
+  font-size: 9px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.note-block.selected .image-editor label,
+.image-editor:focus-within label {
+  opacity: 1;
+}
+
+.image-editor input {
+  min-width: 0;
+  flex: 1;
+  padding: 3px 5px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #d4dce6;
+  border-radius: 5px;
+  font-size: 10px;
+}
+
 .rich-editor h1,
 .rich-editor h2,
 .rich-editor h3,

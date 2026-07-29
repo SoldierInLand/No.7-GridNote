@@ -1,4 +1,4 @@
-export type BlockType = "rich-text";
+export type BlockType = "rich-text" | "image";
 
 export interface RichTextContent {
   html: string;
@@ -8,9 +8,10 @@ export interface AssetRef {
   id: string;
   filename: string;
   mimeType: string;
+  dataUrl?: string;
 }
 
-export interface GridBlock extends RichTextContent {
+interface BlockPlacement {
   id: string;
   type: BlockType;
   column: number;
@@ -18,6 +19,18 @@ export interface GridBlock extends RichTextContent {
   columnSpan: number;
   rowSpan: number;
 }
+
+export interface RichTextBlock extends BlockPlacement, RichTextContent {
+  type: "rich-text";
+}
+
+export interface ImageBlock extends BlockPlacement {
+  type: "image";
+  assetId: string;
+  alt: string;
+}
+
+export type GridBlock = RichTextBlock | ImageBlock;
 
 export interface NotebookPage {
   id: string;

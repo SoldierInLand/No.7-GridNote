@@ -9,7 +9,13 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import JSZip from "jszip";
-import type { GridBlock, Notebook, NotebookPage } from "@/lib/types";
+import type {
+  AssetRef,
+  GridBlock,
+  ImageBlock,
+  Notebook,
+  NotebookPage,
+} from "@/lib/types";
 import {
   cellsToRect,
   collides,
@@ -151,6 +157,7 @@ export function GridnoteEditor() {
   const [ghost, setGhost] = useState<(Rect & { invalid?: boolean }) | null>(null);
   const [status, setStatus] = useState("Ready");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -408,12 +415,14 @@ export function GridnoteEditor() {
   const saveBlockHtml = (blockId: string, html: string) => {
     const clean = sanitizeRichText(html);
     const block = activePage.blocks.find((item) => item.id === blockId);
-    if (!block || block.html === clean) return;
+    if (!block || block.type !== "rich-text" || block.html === clean) return;
     updateActivePage(
       (page) => ({
         ...page,
         blocks: page.blocks.map((item) =>
-          item.id === blockId ? { ...item, html: clean } : item,
+          item.id === blockId && item.type === "rich-text"
+            ? { ...item, html: clean }
+            : item,
         ),
       }),
       "Text saved",
@@ -512,7 +521,11 @@ export function GridnoteEditor() {
     zip.file("index.html", files.html);
     zip.file("styles.css", files.css);
     zip.file("script.js", files.js);
-    zip.folder("assets");
+    const assetFolder = zip.folder("assets");
+    for (const asset of files.assets) {
+      const base64 = asset.dataUrl?.split(",")[1];
+      if (base64) assetFolder?.file(asset.filename, base64, { base64: true });
+    }
     const blob = await zip.generateAsync({ type: "blob" });
     downloadBlob(blob, `${notebook.title.replace(/[^\w-]+/g, "-")}.zip`);
     setStatus("Portable ZIP downloaded");
@@ -540,8 +553,47 @@ export function GridnoteEditor() {
       await writable.write(content);
       await writable.close();
     }
-    await directory.getDirectoryHandle("assets", { create: true });
+    const assetsDirectory = await directory.getDirectoryHandle("assets", {
+      create: true,
+    });
+    for (const asset of files.assets) {
+      if (!asset.dataUrl) continue;
+      const handle = await assetsDirectory.getFileHandle(asset.filename, {
+        create: true,
+      });
+      const writable = await handle.createWritable();
+      await writable.write(await (await fetch(asset.dataUrl)).blob());
+      await writable.close();
+    }
     setStatus("Portable folder saved");
+  };
+
+  const hydrateFolderAssets = async (
+    imported: Notebook,
+    directory: FileSystemDirectoryHandle,
+  ) => {
+    const assetsDirectory = await directory.getDirectoryHandle("assets");
+    const assets = await Promise.all(
+      imported.assets.map(async (asset) => {
+        try {
+          const file = await (
+            await assetsDirectory.getFileHandle(asset.filename)
+          ).getFile();
+          return {
+            ...asset,
+            dataUrl: await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result));
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(file);
+            }),
+          };
+        } catch {
+          return asset;
+        }
+      }),
+    );
+    return { ...imported, assets };
   };
 
   const openFolder = async () => {
@@ -557,7 +609,8 @@ export function GridnoteEditor() {
     try {
       const directory = await picker();
       const file = await (await directory.getFileHandle("index.html")).getFile();
-      const imported = notebookFromPortableHtml(await file.text()) as Notebook;
+      const parsed = notebookFromPortableHtml(await file.text()) as Notebook;
+      const imported = await hydrateFolderAssets(parsed, directory);
       setPast((items) => [...items, notebookRef.current]);
       setFuture([]);
       notebookRef.current = imported;
@@ -578,7 +631,19 @@ export function GridnoteEditor() {
       const htmlEntry = zip.file("index.html");
       if (!htmlEntry) throw new Error("index.html is missing");
       const html = await htmlEntry.async("string");
-      const imported = notebookFromPortableHtml(html) as Notebook;
+      const parsed = notebookFromPortableHtml(html) as Notebook;
+      const assets = await Promise.all(
+        parsed.assets.map(async (asset) => {
+          const entry = zip.file(`assets/${asset.filename}`);
+          if (!entry) return asset;
+          const base64 = await entry.async("base64");
+          return {
+            ...asset,
+            dataUrl: `data:${asset.mimeType};base64,${base64}`,
+          };
+        }),
+      );
+      const imported = { ...parsed, assets };
       setPast((items) => [...items, notebookRef.current]);
       setFuture([]);
       notebookRef.current = imported;
@@ -590,6 +655,71 @@ export function GridnoteEditor() {
         error instanceof Error ? error.message : "Could not import that ZIP",
       );
     }
+  };
+
+  const findImageRect = (blocks: GridBlock[]): Rect | undefined => {
+    const columnSpan = 6;
+    const rowSpan = 5;
+    for (let row = 0; row <= ROWS - rowSpan; row += 1) {
+      for (let column = 0; column <= COLUMNS - columnSpan; column += 1) {
+        const candidate = { column, row, columnSpan, rowSpan };
+        if (!collides(candidate, blocks)) return candidate;
+      }
+    }
+  };
+
+  const insertImage = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      setStatus("Choose an image file");
+      return;
+    }
+    const rect = findImageRect(activePage.blocks);
+    if (!rect) {
+      setStatus("This page has no open 6 × 5 area for an image");
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    const assetId = uid("asset");
+    const safeBase =
+      file.name.replace(/[^a-zA-Z0-9._-]+/g, "-") || "image.png";
+    const duplicate = notebook.assets.some(
+      (asset) => asset.filename === safeBase,
+    );
+    const filename = duplicate
+      ? `${assetId.slice(-8)}-${safeBase}`
+      : safeBase;
+    const asset: AssetRef = {
+      id: assetId,
+      filename,
+      mimeType: file.type,
+      dataUrl,
+    };
+    const block: ImageBlock = {
+      id: uid("block"),
+      type: "image",
+      ...rect,
+      assetId,
+      alt: file.name.replace(/\.[^.]+$/, ""),
+    };
+    const current = notebookRef.current;
+    commit(
+      {
+        ...current,
+        assets: [...current.assets, asset],
+        pages: current.pages.map((page) =>
+          page.id === current.activePageId
+            ? { ...page, blocks: [...page.blocks, block] }
+            : page,
+        ),
+      },
+      "Image added to the structural grid",
+    );
+    setSelectedId(block.id);
   };
 
   const toolbar = useMemo(
@@ -738,10 +868,23 @@ export function GridnoteEditor() {
         </header>
 
         <div className="formatbar" aria-label="Text formatting">
+          <button onClick={() => imageInputRef.current?.click()}>+ Image</button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void insertImage(file);
+              event.currentTarget.value = "";
+            }}
+          />
+          <span className="toolbar-divider" />
           {toolbar.map((item) => (
             <button
               key={`${item.command}-${item.label}`}
-              disabled={!selectedBlock}
+              disabled={selectedBlock?.type !== "rich-text"}
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => runFormat(item.command, item.value)}
               aria-label={item.label}
@@ -750,7 +893,7 @@ export function GridnoteEditor() {
             </button>
           ))}
           <button
-            disabled={!selectedBlock}
+            disabled={selectedBlock?.type !== "rich-text"}
             onPointerDown={(event) => event.preventDefault()}
             onClick={() => {
               const url = window.prompt("Link URL");
@@ -819,16 +962,62 @@ export function GridnoteEditor() {
                         {block.columnSpan} × {block.rowSpan}
                       </small>
                     </button>
-                    <div
-                      className="rich-editor"
-                      data-editor-id={block.id}
-                      contentEditable
-                      suppressContentEditableWarning
-                      dangerouslySetInnerHTML={{ __html: block.html }}
-                      onBlur={(event) =>
-                        saveBlockHtml(block.id, event.currentTarget.innerHTML)
-                      }
-                    />
+                    {block.type === "rich-text" ? (
+                      <div
+                        className="rich-editor"
+                        data-editor-id={block.id}
+                        contentEditable
+                        suppressContentEditableWarning
+                        dangerouslySetInnerHTML={{ __html: block.html }}
+                        onBlur={(event) =>
+                          saveBlockHtml(block.id, event.currentTarget.innerHTML)
+                        }
+                      />
+                    ) : (
+                      <div className="image-editor">
+                        {notebook.assets.find(
+                          (asset) => asset.id === block.assetId,
+                        )?.dataUrl ? (
+                          <img
+                            src={
+                              notebook.assets.find(
+                                (asset) => asset.id === block.assetId,
+                              )?.dataUrl
+                            }
+                            alt={block.alt}
+                          />
+                        ) : (
+                          <span>Image asset missing</span>
+                        )}
+                        <label>
+                          Alt text
+                          <input
+                            value={block.alt}
+                            onChange={(event) => {
+                              const alt = event.target.value;
+                              setNotebook({
+                                ...notebook,
+                                pages: notebook.pages.map((page) => ({
+                                  ...page,
+                                  blocks: page.blocks.map((item) =>
+                                    item.id === block.id &&
+                                    item.type === "image"
+                                      ? { ...item, alt }
+                                      : item,
+                                  ),
+                                })),
+                              });
+                            }}
+                            onBlur={() =>
+                              commit(
+                                { ...notebookRef.current },
+                                "Image description saved",
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    )}
                     <button
                       className="resize-handle"
                       onPointerDown={(event) => startResize(event, block)}

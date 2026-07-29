@@ -12,7 +12,14 @@ test("portable HTML round-trips pages, structural coordinates, and rich text", (
     title: "Field Notes",
     activePageId: "page-2",
     updatedAt: "2026-07-29T12:00:00.000Z",
-    assets: [],
+    assets: [
+      {
+        id: "asset-1",
+        filename: "garden.png",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      },
+    ],
     pages: [
       {
         id: "page-1",
@@ -29,7 +36,22 @@ test("portable HTML round-trips pages, structural coordinates, and rich text", (
           },
         ],
       },
-      { id: "page-2", title: "Reading", blocks: [] },
+      {
+        id: "page-2",
+        title: "Reading",
+        blocks: [
+          {
+            id: "block-image",
+            type: "image",
+            column: 8,
+            row: 1,
+            columnSpan: 5,
+            rowSpan: 6,
+            assetId: "asset-1",
+            alt: "Rosemary in the garden",
+          },
+        ],
+      },
     ],
   };
 
@@ -38,5 +60,10 @@ test("portable HTML round-trips pages, structural coordinates, and rich text", (
   assert.match(files.html, /data-column="2"/);
   assert.match(files.html, /href="styles\.css"/);
   assert.match(files.html, /src="script\.js"/);
-  assert.deepEqual(notebookFromPortableHtml(files.html), notebook);
+  assert.match(files.html, /src="assets\/garden\.png"/);
+  assert.equal(files.assets[0].filename, "garden.png");
+  assert.deepEqual(notebookFromPortableHtml(files.html), {
+    ...notebook,
+    assets: notebook.assets.map(({ dataUrl: _dataUrl, ...asset }) => asset),
+  });
 });
