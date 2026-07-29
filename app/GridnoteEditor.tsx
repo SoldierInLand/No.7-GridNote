@@ -8,7 +8,6 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import JSZip from "jszip";
 import type {
   AssetRef,
   AttachmentBlock,
@@ -19,7 +18,8 @@ import type {
   NotebookPage,
   ShapeBlock,
   TableBlock,
-} from "./types";
+  Notebook,
+} from "@/lib/notebook-types";
 import {
   cellsToRect,
   collides,
@@ -28,58 +28,26 @@ import {
   resizeBlock,
 } from "@/lib/grid.mjs";
 import {
-  createPortableFiles,
-  recoverNotebookFromPortableHtml,
   sanitizeRichText,
 } from "@/lib/portable.mjs";
+import { loadDraft, saveDraft } from "@/lib/draft-store";
+import {
+  dataUrlForFile,
+  exportPortableZip,
+  importPortableZip,
+  openPortableFolder,
+  savePortableFolder,
+} from "@/lib/notebook-files";
+import {
+  estimateNotebookSize,
+  findOpenRect,
+  GRID,
+  historyLimit,
+  initialNotebook,
+  uid,
+} from "@/lib/notebook-model";
 
-const CELL = 32;
-const COLUMNS = 40;
-const ROWS = 30;
-const DRAFT_KEY = "gridnote-core-draft";
-
-type Notebook = {
-  id: string;
-  title: string;
-  activePageId: string;
-  pages: NotebookPage[];
-  assets: AssetRef[];
-  updatedAt?: string;
-};
-
-const initialNotebook: Notebook = {
-  id: "gridnote-welcome",
-  title: "Field Notes",
-  activePageId: "page-garden",
-  assets: [],
-  pages: [
-    {
-      id: "page-garden",
-      title: "Garden ideas",
-      blocks: [
-        {
-          id: "block-welcome",
-          type: "rich-text",
-          column: 2,
-          row: 2,
-          columnSpan: 7,
-          rowSpan: 4,
-          html: "<h2>Welcome to Gridnote</h2><p>Write inside this block, or drag across empty grid cells to create another.</p><ul><li>The grid controls real position and size</li><li>Blocks never overlap</li><li>Your notebook exports as a webpage</li></ul>",
-        },
-        {
-          id: "block-checklist",
-          type: "rich-text",
-          column: 11,
-          row: 2,
-          columnSpan: 5,
-          rowSpan: 4,
-          html: "<h3>Try it</h3><p>☐ Select this block</p><p>☐ Drag its top handle</p><p>☐ Resize from the corner</p>",
-        },
-      ],
-    },
-    { id: "page-reading", title: "Reading list", blocks: [] },
-  ],
-};
+const { cell: CELL, columns: COLUMNS, rows: ROWS } = GRID;
 
 type Rect = {
   column: number;
@@ -112,101 +80,6 @@ type Interaction =
       startColumnSpan: number;
       startRowSpan: number;
     };
-
-function uid(prefix: string) {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function openDraftDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open("gridnote", 1);
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore("drafts");
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function saveDraft(notebook: Notebook) {
-  const database = await openDraftDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const transaction = database.transaction("drafts", "readwrite");
-    transaction.objectStore("drafts").put(notebook, DRAFT_KEY);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-  database.close();
-}
-
-async function loadDraft(): Promise<Notebook | undefined> {
-  const database = await openDraftDatabase();
-  const result = await new Promise<Notebook | undefined>((resolve, reject) => {
-    const request = database
-      .transaction("drafts", "readonly")
-      .objectStore("drafts")
-      .get(DRAFT_KEY);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  database.close();
-  return result;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-function estimateNotebookSize(notebook: Notebook) {
-  const assetBytes = notebook.assets.reduce(
-    (total, asset) => total + (asset.dataUrl?.length ?? 0),
-    0,
-  );
-  const contentBytes = notebook.pages.reduce(
-    (pageTotal, page) =>
-      pageTotal +
-      page.title.length +
-      page.blocks.reduce((blockTotal, block) => {
-        if (block.type === "rich-text") return blockTotal + block.html.length;
-        if (block.type === "table") {
-          return (
-            blockTotal +
-            block.cells.reduce(
-              (rowTotal, row) =>
-                rowTotal +
-                row.reduce((cellTotal, cell) => cellTotal + cell.length, 0),
-              0,
-            )
-          );
-        }
-        if (block.type === "drawing") {
-          return (
-            blockTotal +
-            block.strokes.reduce(
-              (strokeTotal, stroke) =>
-                strokeTotal + stroke.points.length * 24,
-              0,
-            )
-          );
-        }
-        return blockTotal + 256;
-      }, 0),
-    0,
-  );
-  return assetBytes + contentBytes;
-}
-
-function historyLimit(notebook: Notebook) {
-  const size = estimateNotebookSize(notebook);
-  if (size > 5_000_000) return 5;
-  if (size > 1_000_000) return 12;
-  return 30;
-}
 
 export function GridnoteEditor() {
   const [notebook, setNotebook] = useState(initialNotebook);
@@ -849,143 +722,66 @@ export function GridnoteEditor() {
 
   const exportZip = async () => {
     try {
-      const missingAssets = notebook.assets.filter((asset) => !asset.dataUrl);
-      if (missingAssets.length) {
-        setWarningMessage(
-          `${missingAssets.length} asset${missingAssets.length === 1 ? " is" : "s are"} missing. Reopen the original ZIP or folder before exporting.`,
-        );
-        setStatus("Export paused: assets are missing");
-        return;
-      }
       setStatus("Preparing portable notebook…");
-      const files = createPortableFiles(notebook);
-      const zip = new JSZip();
-      zip.file("index.html", files.html);
-      zip.file("styles.css", files.css);
-      zip.file("script.js", files.js);
-      const assetFolder = zip.folder("assets");
-      for (const asset of files.assets) {
-        const base64 = asset.dataUrl?.split(",")[1];
-        if (base64) assetFolder?.file(asset.filename, base64, { base64: true });
-      }
       let lastProgress = 0;
-      const blob = await zip.generateAsync(
-        { type: "blob", compression: "STORE" },
-        ({ percent }) => {
+      await exportPortableZip(notebook, (percent) => {
           const progress = Math.floor(percent / 25) * 25;
           if (progress > lastProgress && progress < 100) {
             lastProgress = progress;
             setStatus(`Preparing portable notebook… ${progress}%`);
           }
-        },
-      );
-      downloadBlob(blob, `${notebook.title.replace(/[^\w-]+/g, "-")}.zip`);
+        });
       setStatus("Portable ZIP downloaded");
-    } catch {
+    } catch (error) {
       setStatus("Could not export this notebook");
       setWarningMessage(
-        "Export ran out of browser memory. Close other tabs, then try again.",
+        error instanceof Error
+          ? error.message
+          : "Export ran out of browser memory. Close other tabs, then try again.",
       );
     }
   };
 
   const saveFolder = async () => {
-    const picker = (
-      window as Window & {
-        showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
-      }
-    ).showDirectoryPicker;
-    if (!picker) {
-      setStatus("Folder saving is unavailable here; use Export ZIP");
-      return;
+    try {
+      await savePortableFolder(notebook);
+      setStatus("Portable folder saved");
+    } catch (error) {
+      if ((error as DOMException)?.name === "AbortError") return;
+      setStatus(
+        error instanceof Error ? error.message : "Could not save that folder",
+      );
     }
-    const directory = await picker();
-    const files = createPortableFiles(notebook);
-    for (const [name, content] of Object.entries({
-      "index.html": files.html,
-      "styles.css": files.css,
-      "script.js": files.js,
-    })) {
-      const handle = await directory.getFileHandle(name, { create: true });
-      const writable = await handle.createWritable();
-      await writable.write(content);
-      await writable.close();
-    }
-    const assetsDirectory = await directory.getDirectoryHandle("assets", {
-      create: true,
-    });
-    for (const asset of files.assets) {
-      if (!asset.dataUrl) continue;
-      const handle = await assetsDirectory.getFileHandle(asset.filename, {
-        create: true,
-      });
-      const writable = await handle.createWritable();
-      await writable.write(await (await fetch(asset.dataUrl)).blob());
-      await writable.close();
-    }
-    setStatus("Portable folder saved");
   };
 
-  const hydrateFolderAssets = async (
+  const applyImportedNotebook = (
     imported: Notebook,
-    directory: FileSystemDirectoryHandle,
+    warnings: string[],
+    action: "Opened" | "Imported",
   ) => {
-    const assetsDirectory = await directory.getDirectoryHandle("assets");
-    const assets = await Promise.all(
-      imported.assets.map(async (asset) => {
-        try {
-          const file = await (
-            await assetsDirectory.getFileHandle(asset.filename)
-          ).getFile();
-          return {
-            ...asset,
-            dataUrl: await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(String(reader.result));
-              reader.onerror = () => reject(reader.error);
-              reader.readAsDataURL(file);
-            }),
-          };
-        } catch {
-          return asset;
-        }
-      }),
+    setPast((items) => {
+      const limit = historyLimit(notebookRef.current);
+      return [
+        ...items.slice(-Math.max(0, limit - 1)),
+        notebookRef.current,
+      ];
+    });
+    setFuture([]);
+    notebookRef.current = imported;
+    setNotebook(imported);
+    setSelectedId(null);
+    setStatus(`${action} ${imported.title}`);
+    setWarningMessage(
+      warnings.length
+        ? `Recovered ${warnings.length} issue${warnings.length === 1 ? "" : "s"}. ${warnings[0]}`
+        : "",
     );
-    return { ...imported, assets };
   };
 
   const openFolder = async () => {
-    const picker = (
-      window as Window & {
-        showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
-      }
-    ).showDirectoryPicker;
-    if (!picker) {
-      setStatus("Folder opening is unavailable here; import a ZIP instead");
-      return;
-    }
     try {
-      const directory = await picker();
-      const file = await (await directory.getFileHandle("index.html")).getFile();
-      const recovery = recoverNotebookFromPortableHtml(await file.text());
-      const imported = await hydrateFolderAssets(recovery.notebook, directory);
-      setPast((items) => {
-        const limit = historyLimit(notebookRef.current);
-        return [
-          ...items.slice(-Math.max(0, limit - 1)),
-          notebookRef.current,
-        ];
-      });
-      setFuture([]);
-      notebookRef.current = imported;
-      setNotebook(imported);
-      setSelectedId(null);
-      setStatus(`Opened ${imported.title}`);
-      setWarningMessage(
-        recovery.warnings.length
-          ? `Recovered ${recovery.warnings.length} issue${recovery.warnings.length === 1 ? "" : "s"}. ${recovery.warnings[0]}`
-          : "",
-      );
+      const result = await openPortableFolder();
+      applyImportedNotebook(result.notebook, result.warnings, "Opened");
     } catch (error) {
       if ((error as DOMException)?.name === "AbortError") return;
       setStatus(
@@ -996,58 +792,12 @@ export function GridnoteEditor() {
 
   const importZip = async (file: File) => {
     try {
-      const zip = await JSZip.loadAsync(file);
-      const htmlEntry = zip.file("index.html");
-      if (!htmlEntry) throw new Error("index.html is missing");
-      const html = await htmlEntry.async("string");
-      const recovery = recoverNotebookFromPortableHtml(html);
-      const parsed = recovery.notebook;
-      const assets = await Promise.all(
-        parsed.assets.map(async (asset) => {
-          const entry = zip.file(`assets/${asset.filename}`);
-          if (!entry) return asset;
-          const base64 = await entry.async("base64");
-          return {
-            ...asset,
-            dataUrl: `data:${asset.mimeType};base64,${base64}`,
-          };
-        }),
-      );
-      const imported = { ...parsed, assets };
-      setPast((items) => {
-        const limit = historyLimit(notebookRef.current);
-        return [
-          ...items.slice(-Math.max(0, limit - 1)),
-          notebookRef.current,
-        ];
-      });
-      setFuture([]);
-      notebookRef.current = imported;
-      setNotebook(imported);
-      setSelectedId(null);
-      setStatus(`Imported ${imported.title}`);
-      setWarningMessage(
-        recovery.warnings.length
-          ? `Recovered ${recovery.warnings.length} issue${recovery.warnings.length === 1 ? "" : "s"}. ${recovery.warnings[0]}`
-          : "",
-      );
+      const result = await importPortableZip(file);
+      applyImportedNotebook(result.notebook, result.warnings, "Imported");
     } catch (error) {
       setStatus(
         error instanceof Error ? error.message : "Could not import that ZIP",
       );
-    }
-  };
-
-  const findOpenRect = (
-    blocks: GridBlock[],
-    columnSpan: number,
-    rowSpan: number,
-  ): Rect | undefined => {
-    for (let row = 0; row <= ROWS - rowSpan; row += 1) {
-      for (let column = 0; column <= COLUMNS - columnSpan; column += 1) {
-        const candidate = { column, row, columnSpan, rowSpan };
-        if (!collides(candidate, blocks)) return candidate;
-      }
     }
   };
 
@@ -1085,12 +835,7 @@ export function GridnoteEditor() {
       setStatus("This page has no open 6 × 5 area for an image");
       return;
     }
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
+    const dataUrl = await dataUrlForFile(file);
     const assetId = uid("asset");
     const safeBase =
       file.name.replace(/[^a-zA-Z0-9._-]+/g, "-") || "image.png";
@@ -1198,12 +943,7 @@ export function GridnoteEditor() {
       setStatus("This page has no open 6 × 3 area for an attachment");
       return;
     }
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
+    const dataUrl = await dataUrlForFile(file);
     const assetId = uid("asset");
     const safeBase =
       file.name.replace(/[^a-zA-Z0-9._-]+/g, "-") || "attachment";

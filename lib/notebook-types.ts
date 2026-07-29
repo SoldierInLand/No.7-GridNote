@@ -6,10 +6,6 @@ export type BlockType =
   | "attachment"
   | "drawing";
 
-export interface RichTextContent {
-  html: string;
-}
-
 export interface AssetRef {
   id: string;
   filename: string;
@@ -26,8 +22,9 @@ interface BlockPlacement {
   rowSpan: number;
 }
 
-export interface RichTextBlock extends BlockPlacement, RichTextContent {
+export interface RichTextBlock extends BlockPlacement {
   type: "rich-text";
+  html: string;
 }
 
 export interface ImageBlock extends BlockPlacement {
@@ -83,4 +80,13 @@ export interface NotebookPage {
   id: string;
   title: string;
   blocks: GridBlock[];
+}
+
+export interface Notebook {
+  id: string;
+  title: string;
+  activePageId: string;
+  pages: NotebookPage[];
+  assets: AssetRef[];
+  updatedAt?: string;
 }
