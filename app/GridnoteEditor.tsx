@@ -19,7 +19,7 @@ import type {
   NotebookPage,
   ShapeBlock,
   TableBlock,
-} from "@/lib/types";
+} from "./types";
 import {
   cellsToRect,
   collides,
