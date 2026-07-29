@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   createPortableFiles,
   notebookFromPortableHtml,
+  recoverNotebook,
 } from "../lib/portable.mjs";
 
 test("portable HTML round-trips pages, structural coordinates, and rich text", () => {
@@ -130,4 +131,49 @@ test("portable HTML round-trips pages, structural coordinates, and rich text", (
     ...notebook,
     assets: notebook.assets.map(({ dataUrl: _dataUrl, ...asset }) => asset),
   });
+});
+
+test("recovery salvages valid content and reports unsupported blocks", () => {
+  const recovered = recoverNotebook({
+    id: "",
+    title: "",
+    activePageId: "missing-page",
+    updatedAt: "not-a-date",
+    assets: [],
+    pages: [
+      {
+        id: "page-1",
+        title: "",
+        blocks: [
+          {
+            id: "",
+            type: "rich-text",
+            column: -4,
+            row: 2.4,
+            columnSpan: 0,
+            rowSpan: 3.7,
+            html: '<script>alert("bad")</script><p onclick="bad()">Safe</p>',
+          },
+          { id: "unknown", type: "video", column: 1, row: 1 },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(recovered.notebook.title, "Recovered notebook");
+  assert.equal(recovered.notebook.activePageId, "page-1");
+  assert.deepEqual(
+    {
+      column: recovered.notebook.pages[0].blocks[0].column,
+      row: recovered.notebook.pages[0].blocks[0].row,
+      columnSpan: recovered.notebook.pages[0].blocks[0].columnSpan,
+      rowSpan: recovered.notebook.pages[0].blocks[0].rowSpan,
+    },
+    { column: 0, row: 2, columnSpan: 1, rowSpan: 4 },
+  );
+  assert.equal(
+    recovered.notebook.pages[0].blocks[0].html,
+    "<p>Safe</p>",
+  );
+  assert.match(recovered.warnings.join(" "), /unsupported block/i);
 });

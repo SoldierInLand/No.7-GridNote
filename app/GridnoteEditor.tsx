@@ -30,7 +30,7 @@ import {
 } from "@/lib/grid.mjs";
 import {
   createPortableFiles,
-  notebookFromPortableHtml,
+  recoverNotebookFromPortableHtml,
   sanitizeRichText,
 } from "@/lib/portable.mjs";
 
@@ -149,6 +149,52 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function estimateNotebookSize(notebook: Notebook) {
+  const assetBytes = notebook.assets.reduce(
+    (total, asset) => total + (asset.dataUrl?.length ?? 0),
+    0,
+  );
+  const contentBytes = notebook.pages.reduce(
+    (pageTotal, page) =>
+      pageTotal +
+      page.title.length +
+      page.blocks.reduce((blockTotal, block) => {
+        if (block.type === "rich-text") return blockTotal + block.html.length;
+        if (block.type === "table") {
+          return (
+            blockTotal +
+            block.cells.reduce(
+              (rowTotal, row) =>
+                rowTotal +
+                row.reduce((cellTotal, cell) => cellTotal + cell.length, 0),
+              0,
+            )
+          );
+        }
+        if (block.type === "drawing") {
+          return (
+            blockTotal +
+            block.strokes.reduce(
+              (strokeTotal, stroke) =>
+                strokeTotal + stroke.points.length * 24,
+              0,
+            )
+          );
+        }
+        return blockTotal + 256;
+      }, 0),
+    0,
+  );
+  return assetBytes + contentBytes;
+}
+
+function historyLimit(notebook: Notebook) {
+  const size = estimateNotebookSize(notebook);
+  if (size > 5_000_000) return 5;
+  if (size > 1_000_000) return 12;
+  return 30;
+}
+
 export function GridnoteEditor() {
   const [notebook, setNotebook] = useState(initialNotebook);
   const notebookRef = useRef(notebook);
@@ -161,6 +207,8 @@ export function GridnoteEditor() {
   const [interaction, setInteraction] = useState<Interaction | null>(null);
   const [ghost, setGhost] = useState<(Rect & { invalid?: boolean }) | null>(null);
   const [status, setStatus] = useState("Ready");
+  const [warningMessage, setWarningMessage] = useState("");
+  const [phoneMode, setPhoneMode] = useState<"edit" | "pan">("edit");
   const [drawColor, setDrawColor] = useState("#556b5d");
   const [drawWidth, setDrawWidth] = useState(3);
   const [drawingStrokeId, setDrawingStrokeId] = useState<string | null>(null);
@@ -168,6 +216,21 @@ export function GridnoteEditor() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const canvasScrollRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
+  const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{
+    distance: number;
+    startZoom: number;
+    contentX: number;
+    contentY: number;
+  } | null>(null);
 
   useEffect(() => {
     notebookRef.current = notebook;
@@ -185,11 +248,17 @@ export function GridnoteEditor() {
   }, []);
 
   useEffect(() => {
+    const delay = estimateNotebookSize(notebook) > 1_000_000 ? 1200 : 450;
     const timer = window.setTimeout(() => {
       saveDraft(notebook)
         .then(() => setStatus("Saved locally"))
-        .catch(() => setStatus("Could not save locally"));
-    }, 450);
+        .catch(() => {
+          setStatus("Could not save locally");
+          setWarningMessage(
+            "Browser storage is full or unavailable. Export a ZIP now to protect this notebook.",
+          );
+        });
+    }, delay);
     return () => window.clearTimeout(timer);
   }, [notebook]);
 
@@ -204,7 +273,11 @@ export function GridnoteEditor() {
     interaction && interaction.kind !== "create" ? interaction.id : null;
 
   const commit = useCallback((next: Notebook, message = "Saved locally") => {
-    setPast((items) => [...items.slice(-39), notebookRef.current]);
+    const limit = historyLimit(notebookRef.current);
+    setPast((items) => [
+      ...items.slice(-Math.max(0, limit - 1)),
+      notebookRef.current,
+    ]);
     setFuture([]);
     const timestamped = { ...next, updatedAt: new Date().toISOString() };
     notebookRef.current = timestamped;
@@ -232,7 +305,12 @@ export function GridnoteEditor() {
     setPast((items) => {
       const previous = items.at(-1);
       if (!previous) return items;
-      setFuture((nextItems) => [notebookRef.current, ...nextItems].slice(0, 40));
+      setFuture((nextItems) =>
+        [notebookRef.current, ...nextItems].slice(
+          0,
+          historyLimit(notebookRef.current),
+        ),
+      );
       notebookRef.current = previous;
       setNotebook(previous);
       setStatus("Undid change");
@@ -244,7 +322,13 @@ export function GridnoteEditor() {
     setFuture((items) => {
       const next = items[0];
       if (!next) return items;
-      setPast((previousItems) => [...previousItems, notebookRef.current]);
+      setPast((previousItems) => {
+        const limit = historyLimit(notebookRef.current);
+        return [
+          ...previousItems.slice(-Math.max(0, limit - 1)),
+          notebookRef.current,
+        ];
+      });
       notebookRef.current = next;
       setNotebook(next);
       setStatus("Redid change");
@@ -283,6 +367,21 @@ export function GridnoteEditor() {
   );
 
   const onCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pinchRef.current) return;
+    if (phoneMode === "pan") {
+      const scroller = canvasScrollRef.current;
+      if (!scroller) return;
+      panRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: scroller.scrollLeft,
+        scrollTop: scroller.scrollTop,
+      };
+      setSelectedId(null);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
     if (event.button !== 0 || event.target !== canvasRef.current) return;
     const cell = pointToCell(event.clientX, event.clientY);
     setSelectedId(null);
@@ -292,6 +391,16 @@ export function GridnoteEditor() {
   };
 
   const onCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pinchRef.current) return;
+    const pan = panRef.current;
+    if (pan?.pointerId === event.pointerId) {
+      const scroller = canvasScrollRef.current;
+      if (scroller) {
+        scroller.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX);
+        scroller.scrollTop = pan.scrollTop - (event.clientY - pan.startY);
+      }
+      return;
+    }
     if (!interaction) return;
     if (interaction.kind === "create") {
       const next = cellsToRect(
@@ -338,7 +447,11 @@ export function GridnoteEditor() {
     }
   };
 
-  const onCanvasPointerUp = () => {
+  const onCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (panRef.current?.pointerId === event.pointerId) {
+      panRef.current = null;
+      return;
+    }
     if (!interaction) return;
     if (interaction.kind === "create" && selection) {
       if (!collides(selection, activePage.blocks)) {
@@ -389,10 +502,87 @@ export function GridnoteEditor() {
     setInteraction(null);
   };
 
+  const pinchDistance = () => {
+    const points = [...touchPointsRef.current.values()];
+    if (points.length < 2) return 0;
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  };
+
+  const pinchMidpoint = () => {
+    const points = [...touchPointsRef.current.values()];
+    return {
+      x: (points[0].x + points[1].x) / 2,
+      y: (points[0].y + points[1].y) / 2,
+    };
+  };
+
+  const onCanvasPointerDownCapture = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (event.pointerType !== "touch") return;
+    touchPointsRef.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (touchPointsRef.current.size !== 2) return;
+    const scroller = canvasScrollRef.current;
+    if (!scroller) return;
+    const midpoint = pinchMidpoint();
+    const rect = scroller.getBoundingClientRect();
+    pinchRef.current = {
+      distance: Math.max(1, pinchDistance()),
+      startZoom: zoom,
+      contentX: (scroller.scrollLeft + midpoint.x - rect.left) / zoom,
+      contentY: (scroller.scrollTop + midpoint.y - rect.top) / zoom,
+    };
+    panRef.current = null;
+    setSelection(null);
+    setGhost(null);
+    setInteraction(null);
+  };
+
+  const onCanvasPointerMoveCapture = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (
+      event.pointerType !== "touch" ||
+      !touchPointsRef.current.has(event.pointerId)
+    ) {
+      return;
+    }
+    touchPointsRef.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    const pinch = pinchRef.current;
+    const scroller = canvasScrollRef.current;
+    if (!pinch || touchPointsRef.current.size < 2 || !scroller) return;
+    event.preventDefault();
+    const nextZoom = Math.max(
+      0.5,
+      Math.min(1.8, pinch.startZoom * (pinchDistance() / pinch.distance)),
+    );
+    const midpoint = pinchMidpoint();
+    const rect = scroller.getBoundingClientRect();
+    setZoom(nextZoom);
+    scroller.scrollLeft =
+      pinch.contentX * nextZoom - (midpoint.x - rect.left);
+    scroller.scrollTop = pinch.contentY * nextZoom - (midpoint.y - rect.top);
+  };
+
+  const onCanvasPointerEndCapture = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (event.pointerType !== "touch") return;
+    touchPointsRef.current.delete(event.pointerId);
+    if (touchPointsRef.current.size < 2) pinchRef.current = null;
+  };
+
   const startMove = (
     event: ReactPointerEvent<HTMLButtonElement>,
     block: GridBlock,
   ) => {
+    if (phoneMode === "pan") return;
     event.stopPropagation();
     setSelectedId(block.id);
     setInteraction({
@@ -410,6 +600,7 @@ export function GridnoteEditor() {
     event: ReactPointerEvent<HTMLButtonElement>,
     block: GridBlock,
   ) => {
+    if (phoneMode === "pan") return;
     event.stopPropagation();
     setSelectedId(block.id);
     setInteraction({
@@ -526,20 +717,45 @@ export function GridnoteEditor() {
   };
 
   const exportZip = async () => {
-    setStatus("Preparing portable notebook…");
-    const files = createPortableFiles(notebook);
-    const zip = new JSZip();
-    zip.file("index.html", files.html);
-    zip.file("styles.css", files.css);
-    zip.file("script.js", files.js);
-    const assetFolder = zip.folder("assets");
-    for (const asset of files.assets) {
-      const base64 = asset.dataUrl?.split(",")[1];
-      if (base64) assetFolder?.file(asset.filename, base64, { base64: true });
+    try {
+      const missingAssets = notebook.assets.filter((asset) => !asset.dataUrl);
+      if (missingAssets.length) {
+        setWarningMessage(
+          `${missingAssets.length} asset${missingAssets.length === 1 ? " is" : "s are"} missing. Reopen the original ZIP or folder before exporting.`,
+        );
+        setStatus("Export paused: assets are missing");
+        return;
+      }
+      setStatus("Preparing portable notebook…");
+      const files = createPortableFiles(notebook);
+      const zip = new JSZip();
+      zip.file("index.html", files.html);
+      zip.file("styles.css", files.css);
+      zip.file("script.js", files.js);
+      const assetFolder = zip.folder("assets");
+      for (const asset of files.assets) {
+        const base64 = asset.dataUrl?.split(",")[1];
+        if (base64) assetFolder?.file(asset.filename, base64, { base64: true });
+      }
+      let lastProgress = 0;
+      const blob = await zip.generateAsync(
+        { type: "blob", compression: "STORE" },
+        ({ percent }) => {
+          const progress = Math.floor(percent / 25) * 25;
+          if (progress > lastProgress && progress < 100) {
+            lastProgress = progress;
+            setStatus(`Preparing portable notebook… ${progress}%`);
+          }
+        },
+      );
+      downloadBlob(blob, `${notebook.title.replace(/[^\w-]+/g, "-")}.zip`);
+      setStatus("Portable ZIP downloaded");
+    } catch {
+      setStatus("Could not export this notebook");
+      setWarningMessage(
+        "Export ran out of browser memory. Close other tabs, then try again.",
+      );
     }
-    const blob = await zip.generateAsync({ type: "blob" });
-    downloadBlob(blob, `${notebook.title.replace(/[^\w-]+/g, "-")}.zip`);
-    setStatus("Portable ZIP downloaded");
   };
 
   const saveFolder = async () => {
@@ -620,14 +836,25 @@ export function GridnoteEditor() {
     try {
       const directory = await picker();
       const file = await (await directory.getFileHandle("index.html")).getFile();
-      const parsed = notebookFromPortableHtml(await file.text()) as Notebook;
-      const imported = await hydrateFolderAssets(parsed, directory);
-      setPast((items) => [...items, notebookRef.current]);
+      const recovery = recoverNotebookFromPortableHtml(await file.text());
+      const imported = await hydrateFolderAssets(recovery.notebook, directory);
+      setPast((items) => {
+        const limit = historyLimit(notebookRef.current);
+        return [
+          ...items.slice(-Math.max(0, limit - 1)),
+          notebookRef.current,
+        ];
+      });
       setFuture([]);
       notebookRef.current = imported;
       setNotebook(imported);
       setSelectedId(null);
       setStatus(`Opened ${imported.title}`);
+      setWarningMessage(
+        recovery.warnings.length
+          ? `Recovered ${recovery.warnings.length} issue${recovery.warnings.length === 1 ? "" : "s"}. ${recovery.warnings[0]}`
+          : "",
+      );
     } catch (error) {
       if ((error as DOMException)?.name === "AbortError") return;
       setStatus(
@@ -642,7 +869,8 @@ export function GridnoteEditor() {
       const htmlEntry = zip.file("index.html");
       if (!htmlEntry) throw new Error("index.html is missing");
       const html = await htmlEntry.async("string");
-      const parsed = notebookFromPortableHtml(html) as Notebook;
+      const recovery = recoverNotebookFromPortableHtml(html);
+      const parsed = recovery.notebook;
       const assets = await Promise.all(
         parsed.assets.map(async (asset) => {
           const entry = zip.file(`assets/${asset.filename}`);
@@ -655,12 +883,23 @@ export function GridnoteEditor() {
         }),
       );
       const imported = { ...parsed, assets };
-      setPast((items) => [...items, notebookRef.current]);
+      setPast((items) => {
+        const limit = historyLimit(notebookRef.current);
+        return [
+          ...items.slice(-Math.max(0, limit - 1)),
+          notebookRef.current,
+        ];
+      });
       setFuture([]);
       notebookRef.current = imported;
       setNotebook(imported);
       setSelectedId(null);
       setStatus(`Imported ${imported.title}`);
+      setWarningMessage(
+        recovery.warnings.length
+          ? `Recovered ${recovery.warnings.length} issue${recovery.warnings.length === 1 ? "" : "s"}. ${recovery.warnings[0]}`
+          : "",
+      );
     } catch (error) {
       setStatus(
         error instanceof Error ? error.message : "Could not import that ZIP",
@@ -880,6 +1119,7 @@ export function GridnoteEditor() {
     event: ReactPointerEvent<SVGSVGElement>,
     block: DrawingBlock,
   ) => {
+    if (phoneMode === "pan" || pinchRef.current) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     const stroke: DrawingStroke = {
@@ -901,7 +1141,7 @@ export function GridnoteEditor() {
     event: ReactPointerEvent<SVGSVGElement>,
     block: DrawingBlock,
   ) => {
-    if (!drawingStrokeId) return;
+    if (!drawingStrokeId || phoneMode === "pan" || pinchRef.current) return;
     event.stopPropagation();
     const point = drawingPoint(event);
     updateBlockDraft(block.id, (item) => {
@@ -1139,7 +1379,18 @@ export function GridnoteEditor() {
           </button>
         </div>
 
-        <div className="canvas-scroll">
+        <div className="canvas-scroll" ref={canvasScrollRef}>
+          {warningMessage && (
+            <div className="recovery-banner" role="status">
+              <span>{warningMessage}</span>
+              <button
+                onClick={() => setWarningMessage("")}
+                aria-label="Dismiss warning"
+              >
+                ×
+              </button>
+            </div>
+          )}
           <div
             className="canvas-scale-space"
             style={{ width: COLUMNS * CELL * zoom, height: ROWS * CELL * zoom }}
@@ -1152,6 +1403,10 @@ export function GridnoteEditor() {
                 height: ROWS * CELL,
                 transform: `scale(${zoom})`,
               }}
+              onPointerDownCapture={onCanvasPointerDownCapture}
+              onPointerMoveCapture={onCanvasPointerMoveCapture}
+              onPointerUpCapture={onCanvasPointerEndCapture}
+              onPointerCancelCapture={onCanvasPointerEndCapture}
               onPointerDown={onCanvasPointerDown}
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
@@ -1172,6 +1427,7 @@ export function GridnoteEditor() {
                       height: live.rowSpan * CELL,
                     }}
                     onPointerDown={(event) => {
+                      if (phoneMode === "pan") return;
                       event.stopPropagation();
                       setSelectedId(block.id);
                     }}
@@ -1501,9 +1757,27 @@ export function GridnoteEditor() {
 
         <nav className="mobile-tools" aria-label="Mobile tools">
           <button onClick={() => setSidebarOpen(true)}>Pages</button>
-          <button onClick={() => runFormat("bold")}>Text</button>
+          <button
+            className={phoneMode === "pan" ? "active" : ""}
+            onClick={() => {
+              setPhoneMode("pan");
+              setStatus("Pan mode: drag with one finger");
+            }}
+          >
+            Pan
+          </button>
+          <button
+            className={phoneMode === "edit" ? "active" : ""}
+            onClick={() => {
+              setPhoneMode("edit");
+              setStatus("Edit mode");
+            }}
+          >
+            Edit
+          </button>
           <button
             onClick={() => {
+              setPhoneMode("edit");
               setStatus("Drag across empty cells to insert a block");
             }}
           >
