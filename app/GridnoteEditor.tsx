@@ -86,6 +86,17 @@ type Interaction =
       startRowSpan: number;
     };
 
+function contrastTextColor(background: string) {
+  const match = /^#([0-9a-f]{6})$/i.exec(background);
+  if (!match) return "#344055";
+  const value = Number.parseInt(match[1], 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  const luminance = (red * 299 + green * 587 + blue * 114) / 1000;
+  return luminance > 150 ? "#344055" : "#ffffff";
+}
+
 export function GridnoteEditor() {
   const [notebook, setNotebook] = useState(initialNotebook);
   const notebookRef = useRef(notebook);
@@ -104,6 +115,7 @@ export function GridnoteEditor() {
   const [textFormat, setTextFormat] =
     useState<TextFormatState>(emptyTextFormat);
   const [activeEditorId, setActiveEditorId] = useState<string | null>(null);
+  const [formatOpen, setFormatOpen] = useState(true);
   const [drawColor, setDrawColor] = useState("#556b5d");
   const [drawWidth, setDrawWidth] = useState(3);
   const [drawingStrokeId, setDrawingStrokeId] = useState<string | null>(null);
@@ -654,6 +666,16 @@ export function GridnoteEditor() {
     document.dispatchEvent(new Event("selectionchange"));
   };
 
+  const toggleHighlight = () => {
+    const removing = textFormat.marked === true;
+    runFormat("hiliteColor", removing ? "transparent" : "#fff1a8");
+    const foreground =
+      selectedBlock?.type === "shape"
+        ? contrastTextColor(selectedBlock.color)
+        : "#344055";
+    runFormat("foreColor", removing ? foreground : "#3b3522");
+  };
+
   const rememberTextSelection = (editor: HTMLElement) => {
     setActiveEditorId(editor.dataset.editorId ?? null);
     const selection = window.getSelection();
@@ -1152,6 +1174,7 @@ export function GridnoteEditor() {
       { label: "B", command: "bold" },
       { label: "I", command: "italic" },
       { label: "• List", command: "insertUnorderedList" },
+      { label: "1. List", command: "insertOrderedList" },
       { label: "☐", command: "insertText", value: "☐ " },
     ],
     [],
@@ -1344,8 +1367,7 @@ export function GridnoteEditor() {
           className="formatbar"
           aria-label={activeEditorId ? "Text formatting" : "Add content"}
         >
-          {!activeEditorId ? (
-            <>
+          <>
               <button className="primary-add" onClick={insertTextBlock}>
                 + Note
               </button>
@@ -1379,9 +1401,17 @@ export function GridnoteEditor() {
                   event.currentTarget.value = "";
                 }}
               />
-            </>
-          ) : (
+          </>
+          <button
+            className={formatOpen ? "active" : ""}
+            aria-expanded={formatOpen}
+            onClick={() => setFormatOpen((open) => !open)}
+          >
+            Format {formatOpen ? "−" : "+"}
+          </button>
+          {formatOpen && (
             <>
+          <span className="toolbar-divider" />
           <label className="format-select">
             <span className="sr-only">Font</span>
             <select
@@ -1428,7 +1458,9 @@ export function GridnoteEditor() {
                 (item.command === "bold" && textFormat.bold === true) ||
                 (item.command === "italic" && textFormat.italic === true) ||
                 (item.command === "insertUnorderedList" &&
-                  textFormat.list === true) ||
+                  textFormat.unorderedList === true) ||
+                (item.command === "insertOrderedList" &&
+                  textFormat.orderedList === true) ||
                 (item.command === "formatBlock" &&
                   textFormat.block === item.value)
                   ? "active"
@@ -1444,7 +1476,9 @@ export function GridnoteEditor() {
                   : item.command === "italic"
                     ? textFormat.italic === true
                     : item.command === "insertUnorderedList"
-                      ? textFormat.list === true
+                      ? textFormat.unorderedList === true
+                      : item.command === "insertOrderedList"
+                        ? textFormat.orderedList === true
                       : item.command === "formatBlock"
                         ? textFormat.block === item.value
                         : undefined
@@ -1465,6 +1499,16 @@ export function GridnoteEditor() {
             Link
           </button>
               <button
+                className={textFormat.marked === true ? "active mark-button" : "mark-button"}
+                disabled={!activeEditorId}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={toggleHighlight}
+                aria-pressed={textFormat.marked === true}
+              >
+                Mark
+              </button>
+              {activeEditorId && (
+              <button
                 className="done-editing"
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={() => {
@@ -1474,6 +1518,7 @@ export function GridnoteEditor() {
               >
                 Done
               </button>
+              )}
             </>
           )}
           <span className="toolbar-spacer" />
@@ -1672,7 +1717,10 @@ export function GridnoteEditor() {
                     ) : block.type === "shape" ? (
                       <div
                         className={`shape-editor shape-${block.shape}`}
-                        style={{ backgroundColor: block.color }}
+                        style={{
+                          backgroundColor: block.color,
+                          color: contrastTextColor(block.color),
+                        }}
                       >
                         <RichTextEditor
                           blockId={`${block.id}-shape`}

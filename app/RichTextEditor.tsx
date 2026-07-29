@@ -11,8 +11,10 @@ export type TextFormatState = {
   block: Mixed<"p" | "h1" | "h2" | "h3">;
   bold: Mixed<boolean>;
   italic: Mixed<boolean>;
-  list: Mixed<boolean>;
+  unorderedList: Mixed<boolean>;
+  orderedList: Mixed<boolean>;
   link: Mixed<boolean>;
+  marked: Mixed<boolean>;
 };
 
 export const emptyTextFormat: TextFormatState = {
@@ -22,8 +24,10 @@ export const emptyTextFormat: TextFormatState = {
   block: "p",
   bold: false,
   italic: false,
-  list: false,
+  unorderedList: false,
+  orderedList: false,
   link: false,
+  marked: false,
 };
 
 type RichTextEditorProps = {
@@ -116,8 +120,20 @@ function readFormat(editor: HTMLElement): TextFormatState {
       ),
     ),
     italic: shared(styles.map((style) => style.fontStyle === "italic")),
-    list: shared(elements.map((element) => Boolean(element.closest("li")))),
+    unorderedList: shared(
+      elements.map((element) => Boolean(element.closest("ul"))),
+    ),
+    orderedList: shared(
+      elements.map((element) => Boolean(element.closest("ol"))),
+    ),
     link: shared(elements.map((element) => Boolean(element.closest("a")))),
+    marked: shared(
+      styles.map(
+        (style) =>
+          style.backgroundColor !== "rgba(0, 0, 0, 0)" &&
+          style.backgroundColor !== "transparent",
+      ),
+    ),
   };
 }
 
