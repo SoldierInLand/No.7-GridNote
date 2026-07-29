@@ -89,7 +89,13 @@ type Rect = {
 };
 
 type Interaction =
-  | { kind: "create"; start: { column: number; row: number } }
+  | {
+      kind: "create";
+      start: { column: number; row: number };
+      pointerX: number;
+      pointerY: number;
+      dragged: boolean;
+    }
   | {
       kind: "move";
       id: string;
@@ -233,6 +239,7 @@ export function GridnoteEditor() {
     scrollTop: number;
   } | null>(null);
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
+  const savedRangeRef = useRef<Range | null>(null);
   const pinchRef = useRef<{
     distance: number;
     startZoom: number;
@@ -393,8 +400,14 @@ export function GridnoteEditor() {
     if (event.button !== 0 || event.target !== canvasRef.current) return;
     const cell = pointToCell(event.clientX, event.clientY);
     setSelectedId(null);
-    setSelection({ ...cell, columnSpan: 1, rowSpan: 1 });
-    setInteraction({ kind: "create", start: cell });
+    setSelection(null);
+    setInteraction({
+      kind: "create",
+      start: cell,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      dragged: false,
+    });
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -411,6 +424,16 @@ export function GridnoteEditor() {
     }
     if (!interaction) return;
     if (interaction.kind === "create") {
+      const dragged =
+        interaction.dragged ||
+        Math.hypot(
+          event.clientX - interaction.pointerX,
+          event.clientY - interaction.pointerY,
+        ) >= 8;
+      if (!dragged) return;
+      if (!interaction.dragged) {
+        setInteraction({ ...interaction, dragged: true });
+      }
       const next = cellsToRect(
         interaction.start,
         pointToCell(event.clientX, event.clientY),
@@ -479,21 +502,28 @@ export function GridnoteEditor() {
       return;
     }
     if (!interaction) return;
-    if (interaction.kind === "create" && selection) {
+    if (interaction.kind === "create" && interaction.dragged && selection) {
       if (!collides(selection, activePage.blocks)) {
         const block = createBlock({
           id: uid("block"),
           ...selection,
-          html: "<p>Start writing…</p>",
+          html: "<p><br></p>",
         }) as GridBlock;
         updateActivePage(
           (page) => ({ ...page, blocks: [...page.blocks, block] }),
           "Block created",
         );
         setSelectedId(block.id);
+        window.requestAnimationFrame(() => {
+          document
+            .querySelector<HTMLElement>(`[data-editor-id="${block.id}"]`)
+            ?.focus();
+        });
       } else {
         setStatus("Those cells are already occupied");
       }
+    } else if (interaction.kind === "create") {
+      setStatus("Ready");
     }
     if (
       (interaction.kind === "move" || interaction.kind === "resize") &&
@@ -658,11 +688,28 @@ export function GridnoteEditor() {
   };
 
   const runFormat = (command: string, value?: string) => {
-    document.execCommand(command, false, value);
     const editor = document.querySelector<HTMLElement>(
       `[data-editor-id="${selectedId}"]`,
     );
-    if (editor && selectedId) saveBlockHtml(selectedId, editor.innerHTML);
+    if (!editor || !selectedId) return;
+    editor.focus();
+    const selection = window.getSelection();
+    if (selection && savedRangeRef.current) {
+      selection.removeAllRanges();
+      selection.addRange(savedRangeRef.current);
+    }
+    document.execCommand(command, false, value);
+    saveBlockHtml(selectedId, editor.innerHTML);
+  };
+
+  const rememberTextSelection = (editor: HTMLElement) => {
+    const selection = window.getSelection();
+    if (
+      selection?.rangeCount &&
+      editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+    }
   };
 
   const addPage = () => {
@@ -1002,6 +1049,30 @@ export function GridnoteEditor() {
         if (!collides(candidate, blocks)) return candidate;
       }
     }
+  };
+
+  const insertTextBlock = () => {
+    const rect = findOpenRect(activePage.blocks, 6, 4);
+    if (!rect) {
+      setStatus("This page has no open 6 × 4 area for a note");
+      return;
+    }
+    const block = createBlock({
+      id: uid("block"),
+      ...rect,
+      html: "<p><br></p>",
+    }) as GridBlock;
+    updateActivePage(
+      (page) => ({ ...page, blocks: [...page.blocks, block] }),
+      "Note created",
+    );
+    setSelectedId(block.id);
+    setPhoneMode("edit");
+    window.requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-editor-id="${block.id}"]`)
+        ?.focus();
+    });
   };
 
   const insertImage = async (file: File) => {
@@ -1450,6 +1521,7 @@ export function GridnoteEditor() {
         </header>
 
         <div className="formatbar" aria-label="Text formatting">
+          <button onClick={insertTextBlock}>+ Note</button>
           <button onClick={() => imageInputRef.current?.click()}>+ Image</button>
           <input
             ref={imageInputRef}
@@ -1479,6 +1551,47 @@ export function GridnoteEditor() {
             }}
           />
           <span className="toolbar-divider" />
+          <label className="format-select">
+            <span className="sr-only">Font</span>
+            <select
+              aria-label="Font"
+              defaultValue=""
+              disabled={selectedBlock?.type !== "rich-text"}
+              onChange={(event) => {
+                if (event.target.value) {
+                  runFormat("fontName", event.target.value);
+                }
+              }}
+            >
+              <option value="" disabled>
+                Font
+              </option>
+              <option value="Arial">Sans</option>
+              <option value="Georgia">Serif</option>
+              <option value="Courier New">Mono</option>
+            </select>
+          </label>
+          <label className="format-select">
+            <span className="sr-only">Text size</span>
+            <select
+              aria-label="Text size"
+              defaultValue=""
+              disabled={selectedBlock?.type !== "rich-text"}
+              onChange={(event) => {
+                if (event.target.value) {
+                  runFormat("fontSize", event.target.value);
+                }
+              }}
+            >
+              <option value="" disabled>
+                Size
+              </option>
+              <option value="2">Small</option>
+              <option value="3">Normal</option>
+              <option value="4">Large</option>
+              <option value="5">Title</option>
+            </select>
+          </label>
           {toolbar.map((item) => (
             <button
               key={`${item.command}-${item.label}`}
@@ -1616,6 +1729,15 @@ export function GridnoteEditor() {
                         dangerouslySetInnerHTML={{ __html: block.html }}
                         onBlur={(event) =>
                           saveBlockHtml(block.id, event.currentTarget.innerHTML)
+                        }
+                        onSelect={(event) =>
+                          rememberTextSelection(event.currentTarget)
+                        }
+                        onKeyUp={(event) =>
+                          rememberTextSelection(event.currentTarget)
+                        }
+                        onPointerUp={(event) =>
+                          rememberTextSelection(event.currentTarget)
                         }
                       />
                     ) : block.type === "image" ? (
@@ -1941,12 +2063,9 @@ export function GridnoteEditor() {
             Edit
           </button>
           <button
-            onClick={() => {
-              setPhoneMode("edit");
-              setStatus("Drag across empty cells to insert a block");
-            }}
+            onClick={insertTextBlock}
           >
-            + Block
+            + Note
           </button>
           <button onClick={exportZip}>Export</button>
         </nav>

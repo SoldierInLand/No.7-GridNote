@@ -376,6 +376,21 @@ button:disabled {
   font-size: 12px;
 }
 
+.format-select select {
+  min-height: 30px;
+  padding: 4px 24px 4px 8px;
+  color: #5f6c7f;
+  background: #f8f9fa;
+  border: 1px solid #d4dae3;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.format-select select:disabled {
+  opacity: 0.45;
+}
+
 .formatbar .toolbar-spacer {
   flex: 1;
 }
@@ -898,6 +913,10 @@ select:focus-visible,
   }
 
   .formatbar button {
+    flex: 0 0 auto;
+  }
+
+  .format-select {
     flex: 0 0 auto;
   }
 
