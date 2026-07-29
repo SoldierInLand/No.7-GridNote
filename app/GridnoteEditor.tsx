@@ -16,7 +16,6 @@ import type {
   DrawingStroke,
   GridBlock,
   ImageBlock,
-  Notebook,
   NotebookPage,
   ShapeBlock,
   TableBlock,
@@ -38,6 +37,15 @@ const CELL = 32;
 const COLUMNS = 40;
 const ROWS = 30;
 const DRAFT_KEY = "gridnote-core-draft";
+
+type Notebook = {
+  id: string;
+  title: string;
+  activePageId: string;
+  pages: NotebookPage[];
+  assets: AssetRef[];
+  updatedAt?: string;
+};
 
 const initialNotebook: Notebook = {
   id: "gridnote-welcome",
