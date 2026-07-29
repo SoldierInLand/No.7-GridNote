@@ -195,6 +195,8 @@ export function GridnoteEditor() {
   const selectedBlock = activePage?.blocks.find(
     (block) => block.id === selectedId,
   );
+  const interactionBlockId =
+    interaction && interaction.kind !== "create" ? interaction.id : null;
 
   const commit = useCallback((next: Notebook, message = "Saved locally") => {
     setPast((items) => [...items.slice(-39), notebookRef.current]);
@@ -1062,11 +1064,11 @@ export function GridnoteEditor() {
             >
               {activePage.blocks.map((block) => {
                 const live =
-                  interaction?.id === block.id && ghost ? ghost : block;
+                  interactionBlockId === block.id && ghost ? ghost : block;
                 return (
                   <article
                     key={block.id}
-                    className={`note-block ${block.id === selectedId ? "selected" : ""} ${ghost?.invalid && interaction?.id === block.id ? "invalid" : ""}`}
+                    className={`note-block ${block.id === selectedId ? "selected" : ""} ${ghost?.invalid && interactionBlockId === block.id ? "invalid" : ""}`}
                     style={{
                       left: live.column * CELL,
                       top: live.row * CELL,
