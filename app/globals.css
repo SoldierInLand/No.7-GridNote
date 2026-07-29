@@ -492,6 +492,19 @@ button:disabled {
   box-shadow: 0 7px 18px #53657c24;
 }
 
+.note-block.block-shape,
+.note-block.block-drawing {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.note-block.block-shape.selected,
+.note-block.block-drawing.selected {
+  border: 1px dashed #91a4bd;
+  box-shadow: none;
+}
+
 .note-block:focus-visible {
   outline: 3px solid #8fa4c2;
   outline-offset: 3px;
@@ -776,10 +789,7 @@ select:focus-visible,
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background:
-    linear-gradient(#edf0f4 1px, transparent 1px),
-    linear-gradient(90deg, #edf0f4 1px, transparent 1px), #fff;
-  background-size: 16px 16px;
+  background: transparent;
 }
 
 .drawing-editor > svg {
@@ -869,12 +879,14 @@ select:focus-visible,
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 19px;
-  height: 19px;
+  width: 16px;
+  height: 16px;
   padding: 0;
-  background:
-    linear-gradient(135deg, transparent 48%, #8da1bd 48% 58%, transparent 58% 68%, #8da1bd 68%);
+  background: transparent;
   border: 0;
+  border-right: 3px solid #8096b2;
+  border-bottom: 3px solid #8096b2;
+  border-radius: 0 0 4px;
   cursor: nwse-resize;
   opacity: 0;
   pointer-events: none;
@@ -915,10 +927,8 @@ select:focus-visible,
   }
 
   .resize-handle {
-    width: 11px;
-    height: 11px;
-    background:
-      linear-gradient(135deg, transparent 48%, #8da1bd 48% 62%, transparent 62%);
+    width: 12px;
+    height: 12px;
   }
 }
 
@@ -1024,8 +1034,8 @@ select:focus-visible,
   }
 
   .resize-handle {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
   }
 
   .page-order {

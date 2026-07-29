@@ -1505,7 +1505,7 @@ export function GridnoteEditor() {
                 return (
                   <article
                     key={block.id}
-                    className={`note-block ${block.id === selectedId ? "selected" : ""} ${ghost?.invalid && interactionBlockId === block.id ? "invalid" : ""}`}
+                    className={`note-block block-${block.type} ${block.id === selectedId ? "selected" : ""} ${ghost?.invalid && interactionBlockId === block.id ? "invalid" : ""}`}
                     style={{
                       left: live.column * CELL,
                       top: live.row * CELL,
