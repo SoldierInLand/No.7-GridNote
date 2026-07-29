@@ -483,6 +483,7 @@ button:disabled {
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
+  container-type: size;
   user-select: auto;
 }
 
@@ -527,6 +528,7 @@ select:focus-visible,
   border-radius: 10px;
   cursor: grab;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease;
   touch-action: none;
 }
@@ -535,6 +537,7 @@ select:focus-visible,
 .note-block.selected .move-handle,
 .move-handle:focus-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .move-handle:active {
@@ -547,7 +550,7 @@ select:focus-visible,
 
 .rich-editor {
   min-height: 0;
-  padding: 8px 38px 12px 10px;
+  padding: 8px 10px 12px;
   overflow: auto;
   color: #3b4658;
   cursor: text;
@@ -616,7 +619,7 @@ select:focus-visible,
 
 .table-editor {
   min-height: 0;
-  padding: 28px 5px 5px;
+  padding: 5px;
   overflow: auto;
   background: #fbfcfd;
 }
@@ -658,7 +661,7 @@ select:focus-visible,
   position: relative;
   display: grid;
   min-height: 0;
-  padding: 30px 14px 14px;
+  padding: 14px;
   place-items: center;
   overflow: hidden;
 }
@@ -727,7 +730,7 @@ select:focus-visible,
   grid-template-columns: 38px minmax(0, 1fr);
   grid-template-rows: 1fr auto;
   gap: 3px 9px;
-  padding: 28px 38px 9px 11px;
+  padding: 9px 11px;
   align-items: center;
   background: #f9fafb;
 }
@@ -873,7 +876,50 @@ select:focus-visible,
     linear-gradient(135deg, transparent 48%, #8da1bd 48% 58%, transparent 58% 68%, #8da1bd 68%);
   border: 0;
   cursor: nwse-resize;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
   touch-action: none;
+}
+
+.note-block:hover .resize-handle,
+.note-block.selected .resize-handle,
+.resize-handle:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@container (max-width: 48px) {
+  .rich-editor {
+    padding: 3px;
+    font-size: 11px;
+    line-height: 1.15;
+  }
+
+  .rich-editor p,
+  .rich-editor h1,
+  .rich-editor h2,
+  .rich-editor h3,
+  .rich-editor ul {
+    margin: 0;
+  }
+
+  .move-handle {
+    top: 1px;
+    right: 1px;
+    width: 13px;
+    height: 10px;
+    border: 0;
+    background: #eef1f4cc;
+    font-size: 8px;
+  }
+
+  .resize-handle {
+    width: 11px;
+    height: 11px;
+    background:
+      linear-gradient(135deg, transparent 48%, #8da1bd 48% 62%, transparent 62%);
+  }
 }
 
 .selection-rect {
@@ -973,14 +1019,13 @@ select:focus-visible,
   }
 
   .move-handle {
-    width: 32px;
-    height: 28px;
-    opacity: 1;
+    width: 22px;
+    height: 18px;
   }
 
   .resize-handle {
-    width: 30px;
-    height: 30px;
+    width: 18px;
+    height: 18px;
   }
 
   .page-order {
