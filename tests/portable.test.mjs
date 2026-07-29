@@ -89,6 +89,26 @@ test("portable HTML round-trips pages, structural coordinates, and rich text", (
             assetId: "asset-2",
             label: "Seed list",
           },
+          {
+            id: "block-drawing",
+            type: "drawing",
+            column: 15,
+            row: 9,
+            columnSpan: 7,
+            rowSpan: 5,
+            strokes: [
+              {
+                id: "stroke-1",
+                color: "#556b5d",
+                width: 3,
+                points: [
+                  { x: 0.1, y: 0.2 },
+                  { x: 0.5, y: 0.7 },
+                  { x: 0.9, y: 0.3 },
+                ],
+              },
+            ],
+          },
         ],
       },
     ],
@@ -103,6 +123,8 @@ test("portable HTML round-trips pages, structural coordinates, and rich text", (
   assert.match(files.html, /class="block table-block"/);
   assert.match(files.html, /class="block shape-block shape-rounded"/);
   assert.match(files.html, /href="assets\/seed-list\.pdf"/);
+  assert.match(files.html, /class="drawing-view"/);
+  assert.match(files.html, /points="10,20 50,70 90,30"/);
   assert.equal(files.assets[0].filename, "garden.png");
   assert.deepEqual(notebookFromPortableHtml(files.html), {
     ...notebook,

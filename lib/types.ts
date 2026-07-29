@@ -3,7 +3,8 @@ export type BlockType =
   | "image"
   | "table"
   | "shape"
-  | "attachment";
+  | "attachment"
+  | "drawing";
 
 export interface RichTextContent {
   html: string;
@@ -53,12 +54,30 @@ export interface AttachmentBlock extends BlockPlacement {
   label: string;
 }
 
+export interface DrawingPoint {
+  x: number;
+  y: number;
+}
+
+export interface DrawingStroke {
+  id: string;
+  color: string;
+  width: number;
+  points: DrawingPoint[];
+}
+
+export interface DrawingBlock extends BlockPlacement {
+  type: "drawing";
+  strokes: DrawingStroke[];
+}
+
 export type GridBlock =
   | RichTextBlock
   | ImageBlock
   | TableBlock
   | ShapeBlock
-  | AttachmentBlock;
+  | AttachmentBlock
+  | DrawingBlock;
 
 export interface NotebookPage {
   id: string;

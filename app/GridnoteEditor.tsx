@@ -12,6 +12,8 @@ import JSZip from "jszip";
 import type {
   AssetRef,
   AttachmentBlock,
+  DrawingBlock,
+  DrawingStroke,
   GridBlock,
   ImageBlock,
   Notebook,
@@ -159,6 +161,9 @@ export function GridnoteEditor() {
   const [interaction, setInteraction] = useState<Interaction | null>(null);
   const [ghost, setGhost] = useState<(Rect & { invalid?: boolean }) | null>(null);
   const [status, setStatus] = useState("Ready");
+  const [drawColor, setDrawColor] = useState("#556b5d");
+  const [drawWidth, setDrawWidth] = useState(3);
+  const [drawingStrokeId, setDrawingStrokeId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -774,6 +779,25 @@ export function GridnoteEditor() {
     setSelectedId(block.id);
   };
 
+  const insertDrawing = () => {
+    const rect = findOpenRect(activePage.blocks, 8, 6);
+    if (!rect) {
+      setStatus("This page has no open 8 × 6 area for a drawing");
+      return;
+    }
+    const block: DrawingBlock = {
+      id: uid("block"),
+      type: "drawing",
+      ...rect,
+      strokes: [],
+    };
+    updateActivePage(
+      (page) => ({ ...page, blocks: [...page.blocks, block] }),
+      "Drawing canvas added to the structural grid",
+    );
+    setSelectedId(block.id);
+  };
+
   const insertAttachment = async (file: File) => {
     const rect = findOpenRect(activePage.blocks, 6, 3);
     if (!rect) {
@@ -823,16 +847,87 @@ export function GridnoteEditor() {
     setSelectedId(block.id);
   };
 
-  const updateBlockDraft = (blockId: string, updater: (block: GridBlock) => GridBlock) => {
-    setNotebook({
-      ...notebook,
-      pages: notebook.pages.map((page) => ({
-        ...page,
-        blocks: page.blocks.map((block) =>
-          block.id === blockId ? updater(block) : block,
-        ),
-      })),
+  const updateBlockDraft = (
+    blockId: string,
+    updater: (block: GridBlock) => GridBlock,
+  ) => {
+    setNotebook((current) => {
+      const next = {
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          blocks: page.blocks.map((block) =>
+            block.id === blockId ? updater(block) : block,
+          ),
+        })),
+      };
+      notebookRef.current = next;
+      return next;
     });
+  };
+
+  const drawingPoint = (
+    event: ReactPointerEvent<SVGSVGElement>,
+  ): { x: number; y: number } => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    };
+  };
+
+  const startDrawingStroke = (
+    event: ReactPointerEvent<SVGSVGElement>,
+    block: DrawingBlock,
+  ) => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const stroke: DrawingStroke = {
+      id: uid("stroke"),
+      color: drawColor,
+      width: drawWidth,
+      points: [drawingPoint(event)],
+    };
+    setDrawingStrokeId(stroke.id);
+    setSelectedId(block.id);
+    updateBlockDraft(block.id, (item) =>
+      item.type === "drawing"
+        ? { ...item, strokes: [...item.strokes, stroke] }
+        : item,
+    );
+  };
+
+  const continueDrawingStroke = (
+    event: ReactPointerEvent<SVGSVGElement>,
+    block: DrawingBlock,
+  ) => {
+    if (!drawingStrokeId) return;
+    event.stopPropagation();
+    const point = drawingPoint(event);
+    updateBlockDraft(block.id, (item) => {
+      if (item.type !== "drawing") return item;
+      return {
+        ...item,
+        strokes: item.strokes.map((stroke) => {
+          if (stroke.id !== drawingStrokeId) return stroke;
+          const previous = stroke.points.at(-1);
+          if (
+            previous &&
+            Math.abs(previous.x - point.x) + Math.abs(previous.y - point.y) <
+              0.004
+          ) {
+            return stroke;
+          }
+          return { ...stroke, points: [...stroke.points, point] };
+        }),
+      };
+    });
+  };
+
+  const finishDrawingStroke = () => {
+    if (!drawingStrokeId) return;
+    setDrawingStrokeId(null);
+    commit({ ...notebookRef.current }, "Drawing saved");
   };
 
   const toolbar = useMemo(
@@ -995,6 +1090,7 @@ export function GridnoteEditor() {
           />
           <button onClick={insertTable}>+ Table</button>
           <button onClick={insertShape}>+ Shape</button>
+          <button onClick={insertDrawing}>+ Draw</button>
           <button onClick={() => attachmentInputRef.current?.click()}>
             + File
           </button>
@@ -1253,7 +1349,7 @@ export function GridnoteEditor() {
                           />
                         </div>
                       </div>
-                    ) : (
+                    ) : block.type === "attachment" ? (
                       <div className="attachment-editor">
                         <span className="attachment-editor-icon">↓</span>
                         <label>
@@ -1283,6 +1379,99 @@ export function GridnoteEditor() {
                             )?.filename
                           }
                         </small>
+                      </div>
+                    ) : (
+                      <div className="drawing-editor">
+                        <svg
+                          viewBox="0 0 100 100"
+                          preserveAspectRatio="none"
+                          aria-label="Editable freehand drawing"
+                          onPointerDown={(event) =>
+                            startDrawingStroke(event, block)
+                          }
+                          onPointerMove={(event) =>
+                            continueDrawingStroke(event, block)
+                          }
+                          onPointerUp={finishDrawingStroke}
+                          onPointerCancel={finishDrawingStroke}
+                        >
+                          {block.strokes.map((stroke) => (
+                            <polyline
+                              key={stroke.id}
+                              points={stroke.points
+                                .map(
+                                  (point) =>
+                                    `${point.x * 100},${point.y * 100}`,
+                                )
+                                .join(" ")}
+                              fill="none"
+                              stroke={stroke.color}
+                              strokeWidth={stroke.width}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ))}
+                        </svg>
+                        <div className="drawing-controls">
+                          <label>
+                            Ink
+                            <input
+                              type="color"
+                              value={drawColor}
+                              onChange={(event) =>
+                                setDrawColor(event.target.value)
+                              }
+                            />
+                          </label>
+                          <label>
+                            Size
+                            <input
+                              type="range"
+                              min="1"
+                              max="10"
+                              value={drawWidth}
+                              onChange={(event) =>
+                                setDrawWidth(Number(event.target.value))
+                              }
+                            />
+                          </label>
+                          <button
+                            onClick={() => {
+                              updateBlockDraft(block.id, (item) =>
+                                item.type === "drawing"
+                                  ? {
+                                      ...item,
+                                      strokes: item.strokes.slice(0, -1),
+                                    }
+                                  : item,
+                              );
+                              commit(
+                                { ...notebookRef.current },
+                                "Last stroke removed",
+                              );
+                            }}
+                            disabled={!block.strokes.length}
+                          >
+                            Undo stroke
+                          </button>
+                          <button
+                            onClick={() => {
+                              updateBlockDraft(block.id, (item) =>
+                                item.type === "drawing"
+                                  ? { ...item, strokes: [] }
+                                  : item,
+                              );
+                              commit(
+                                { ...notebookRef.current },
+                                "Drawing cleared",
+                              );
+                            }}
+                            disabled={!block.strokes.length}
+                          >
+                            Clear
+                          </button>
+                        </div>
                       </div>
                     )}
                     <button
