@@ -11,10 +11,13 @@ import {
 import JSZip from "jszip";
 import type {
   AssetRef,
+  AttachmentBlock,
   GridBlock,
   ImageBlock,
   Notebook,
   NotebookPage,
+  ShapeBlock,
+  TableBlock,
 } from "@/lib/types";
 import {
   cellsToRect,
@@ -158,6 +161,7 @@ export function GridnoteEditor() {
   const [status, setStatus] = useState("Ready");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -657,9 +661,11 @@ export function GridnoteEditor() {
     }
   };
 
-  const findImageRect = (blocks: GridBlock[]): Rect | undefined => {
-    const columnSpan = 6;
-    const rowSpan = 5;
+  const findOpenRect = (
+    blocks: GridBlock[],
+    columnSpan: number,
+    rowSpan: number,
+  ): Rect | undefined => {
     for (let row = 0; row <= ROWS - rowSpan; row += 1) {
       for (let column = 0; column <= COLUMNS - columnSpan; column += 1) {
         const candidate = { column, row, columnSpan, rowSpan };
@@ -673,7 +679,7 @@ export function GridnoteEditor() {
       setStatus("Choose an image file");
       return;
     }
-    const rect = findImageRect(activePage.blocks);
+    const rect = findOpenRect(activePage.blocks, 6, 5);
     if (!rect) {
       setStatus("This page has no open 6 × 5 area for an image");
       return;
@@ -720,6 +726,111 @@ export function GridnoteEditor() {
       "Image added to the structural grid",
     );
     setSelectedId(block.id);
+  };
+
+  const insertTable = () => {
+    const rect = findOpenRect(activePage.blocks, 7, 6);
+    if (!rect) {
+      setStatus("This page has no open 7 × 6 area for a table");
+      return;
+    }
+    const block: TableBlock = {
+      id: uid("block"),
+      type: "table",
+      ...rect,
+      cells: [
+        ["Column 1", "Column 2", "Column 3"],
+        ["", "", ""],
+        ["", "", ""],
+      ],
+    };
+    updateActivePage(
+      (page) => ({ ...page, blocks: [...page.blocks, block] }),
+      "Table added to the structural grid",
+    );
+    setSelectedId(block.id);
+  };
+
+  const insertShape = () => {
+    const rect = findOpenRect(activePage.blocks, 5, 4);
+    if (!rect) {
+      setStatus("This page has no open 5 × 4 area for a shape");
+      return;
+    }
+    const block: ShapeBlock = {
+      id: uid("block"),
+      type: "shape",
+      ...rect,
+      shape: "rounded",
+      color: "#dce6d5",
+      text: "Shape label",
+    };
+    updateActivePage(
+      (page) => ({ ...page, blocks: [...page.blocks, block] }),
+      "Shape added to the structural grid",
+    );
+    setSelectedId(block.id);
+  };
+
+  const insertAttachment = async (file: File) => {
+    const rect = findOpenRect(activePage.blocks, 6, 3);
+    if (!rect) {
+      setStatus("This page has no open 6 × 3 area for an attachment");
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    const assetId = uid("asset");
+    const safeBase =
+      file.name.replace(/[^a-zA-Z0-9._-]+/g, "-") || "attachment";
+    const filename = notebook.assets.some(
+      (asset) => asset.filename === safeBase,
+    )
+      ? `${assetId.slice(-8)}-${safeBase}`
+      : safeBase;
+    const asset: AssetRef = {
+      id: assetId,
+      filename,
+      mimeType: file.type || "application/octet-stream",
+      dataUrl,
+    };
+    const block: AttachmentBlock = {
+      id: uid("block"),
+      type: "attachment",
+      ...rect,
+      assetId,
+      label: file.name.replace(/\.[^.]+$/, ""),
+    };
+    const current = notebookRef.current;
+    commit(
+      {
+        ...current,
+        assets: [...current.assets, asset],
+        pages: current.pages.map((page) =>
+          page.id === current.activePageId
+            ? { ...page, blocks: [...page.blocks, block] }
+            : page,
+        ),
+      },
+      "File attached to the structural grid",
+    );
+    setSelectedId(block.id);
+  };
+
+  const updateBlockDraft = (blockId: string, updater: (block: GridBlock) => GridBlock) => {
+    setNotebook({
+      ...notebook,
+      pages: notebook.pages.map((page) => ({
+        ...page,
+        blocks: page.blocks.map((block) =>
+          block.id === blockId ? updater(block) : block,
+        ),
+      })),
+    });
   };
 
   const toolbar = useMemo(
@@ -880,6 +991,21 @@ export function GridnoteEditor() {
               event.currentTarget.value = "";
             }}
           />
+          <button onClick={insertTable}>+ Table</button>
+          <button onClick={insertShape}>+ Shape</button>
+          <button onClick={() => attachmentInputRef.current?.click()}>
+            + File
+          </button>
+          <input
+            ref={attachmentInputRef}
+            type="file"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void insertAttachment(file);
+              event.currentTarget.value = "";
+            }}
+          />
           <span className="toolbar-divider" />
           {toolbar.map((item) => (
             <button
@@ -973,7 +1099,7 @@ export function GridnoteEditor() {
                           saveBlockHtml(block.id, event.currentTarget.innerHTML)
                         }
                       />
-                    ) : (
+                    ) : block.type === "image" ? (
                       <div className="image-editor">
                         {notebook.assets.find(
                           (asset) => asset.id === block.assetId,
@@ -1016,6 +1142,145 @@ export function GridnoteEditor() {
                             }
                           />
                         </label>
+                      </div>
+                    ) : block.type === "table" ? (
+                      <div className="table-editor">
+                        <table>
+                          <tbody>
+                            {block.cells.map((row, rowIndex) => (
+                              <tr key={rowIndex}>
+                                {row.map((cell, columnIndex) => {
+                                  const Cell = rowIndex === 0 ? "th" : "td";
+                                  return (
+                                    <Cell key={columnIndex}>
+                                      <input
+                                        value={cell}
+                                        aria-label={`Row ${rowIndex + 1}, column ${columnIndex + 1}`}
+                                        onChange={(event) => {
+                                          const value = event.target.value;
+                                          updateBlockDraft(block.id, (item) => {
+                                            if (item.type !== "table") return item;
+                                            return {
+                                              ...item,
+                                              cells: item.cells.map((tableRow, r) =>
+                                                tableRow.map((entry, c) =>
+                                                  r === rowIndex &&
+                                                  c === columnIndex
+                                                    ? value
+                                                    : entry,
+                                                ),
+                                              ),
+                                            };
+                                          });
+                                        }}
+                                        onBlur={() =>
+                                          commit(
+                                            { ...notebookRef.current },
+                                            "Table saved",
+                                          )
+                                        }
+                                      />
+                                    </Cell>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : block.type === "shape" ? (
+                      <div
+                        className={`shape-editor shape-${block.shape}`}
+                        style={{ backgroundColor: block.color }}
+                      >
+                        <input
+                          className="shape-text"
+                          value={block.text}
+                          aria-label="Shape text"
+                          onChange={(event) => {
+                            const text = event.target.value;
+                            updateBlockDraft(block.id, (item) =>
+                              item.type === "shape" ? { ...item, text } : item,
+                            );
+                          }}
+                          onBlur={() =>
+                            commit(
+                              { ...notebookRef.current },
+                              "Shape text saved",
+                            )
+                          }
+                        />
+                        <div className="shape-controls">
+                          <select
+                            value={block.shape}
+                            aria-label="Shape type"
+                            onChange={(event) => {
+                              const shape = event.target
+                                .value as ShapeBlock["shape"];
+                              updateBlockDraft(block.id, (item) =>
+                                item.type === "shape" ? { ...item, shape } : item,
+                              );
+                            }}
+                            onBlur={() =>
+                              commit(
+                                { ...notebookRef.current },
+                                "Shape style saved",
+                              )
+                            }
+                          >
+                            <option value="rounded">Rounded</option>
+                            <option value="circle">Circle</option>
+                            <option value="note">Note</option>
+                          </select>
+                          <input
+                            type="color"
+                            value={block.color}
+                            aria-label="Shape color"
+                            onChange={(event) => {
+                              const color = event.target.value;
+                              updateBlockDraft(block.id, (item) =>
+                                item.type === "shape" ? { ...item, color } : item,
+                              );
+                            }}
+                            onBlur={() =>
+                              commit(
+                                { ...notebookRef.current },
+                                "Shape color saved",
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="attachment-editor">
+                        <span className="attachment-editor-icon">↓</span>
+                        <label>
+                          Attachment label
+                          <input
+                            value={block.label}
+                            onChange={(event) => {
+                              const label = event.target.value;
+                              updateBlockDraft(block.id, (item) =>
+                                item.type === "attachment"
+                                  ? { ...item, label }
+                                  : item,
+                              );
+                            }}
+                            onBlur={() =>
+                              commit(
+                                { ...notebookRef.current },
+                                "Attachment label saved",
+                              )
+                            }
+                          />
+                        </label>
+                        <small>
+                          {
+                            notebook.assets.find(
+                              (asset) => asset.id === block.assetId,
+                            )?.filename
+                          }
+                        </small>
                       </div>
                     )}
                     <button

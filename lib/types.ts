@@ -1,4 +1,9 @@
-export type BlockType = "rich-text" | "image";
+export type BlockType =
+  | "rich-text"
+  | "image"
+  | "table"
+  | "shape"
+  | "attachment";
 
 export interface RichTextContent {
   html: string;
@@ -30,7 +35,30 @@ export interface ImageBlock extends BlockPlacement {
   alt: string;
 }
 
-export type GridBlock = RichTextBlock | ImageBlock;
+export interface TableBlock extends BlockPlacement {
+  type: "table";
+  cells: string[][];
+}
+
+export interface ShapeBlock extends BlockPlacement {
+  type: "shape";
+  shape: "rounded" | "circle" | "note";
+  color: string;
+  text: string;
+}
+
+export interface AttachmentBlock extends BlockPlacement {
+  type: "attachment";
+  assetId: string;
+  label: string;
+}
+
+export type GridBlock =
+  | RichTextBlock
+  | ImageBlock
+  | TableBlock
+  | ShapeBlock
+  | AttachmentBlock;
 
 export interface NotebookPage {
   id: string;
