@@ -46,7 +46,11 @@ import {
   initialNotebook,
   uid,
 } from "@/lib/notebook-model";
-import { RichTextEditor } from "./RichTextEditor";
+import {
+  emptyTextFormat,
+  RichTextEditor,
+  type TextFormatState,
+} from "./RichTextEditor";
 
 const { cell: CELL, columns: COLUMNS, rows: ROWS } = GRID;
 
@@ -97,6 +101,8 @@ export function GridnoteEditor() {
   const [warningMessage, setWarningMessage] = useState("");
   const [phoneMode, setPhoneMode] = useState<"edit" | "pan">("edit");
   const [pageQuery, setPageQuery] = useState("");
+  const [textFormat, setTextFormat] =
+    useState<TextFormatState>(emptyTextFormat);
   const [drawColor, setDrawColor] = useState("#556b5d");
   const [drawWidth, setDrawWidth] = useState(3);
   const [drawingStrokeId, setDrawingStrokeId] = useState<string | null>(null);
@@ -158,6 +164,12 @@ export function GridnoteEditor() {
   const selectedBlock = activePage?.blocks.find(
     (block) => block.id === selectedId,
   );
+
+  useEffect(() => {
+    if (selectedBlock?.type !== "rich-text") {
+      setTextFormat(emptyTextFormat);
+    }
+  }, [selectedBlock?.type]);
   const interactionBlockId =
     interaction && interaction.kind !== "create" ? interaction.id : null;
 
@@ -574,6 +586,7 @@ export function GridnoteEditor() {
     }
     document.execCommand(command, false, value);
     saveBlockHtml(selectedId, editor.innerHTML);
+    document.dispatchEvent(new Event("selectionchange"));
   };
 
   const rememberTextSelection = (editor: HTMLElement) => {
@@ -1077,6 +1090,28 @@ export function GridnoteEditor() {
     ],
     [],
   );
+  const formatIsMixed = Object.entries(textFormat).some(
+    ([key, value]) => key !== "hasSelection" && value === "mixed",
+  );
+  const formatSummary = formatIsMixed
+    ? "Selection: mixed formatting"
+    : [
+        textFormat.block !== "p" ? textFormat.block.toUpperCase() : null,
+        textFormat.font === "system-ui" ? "System" : textFormat.font,
+        {
+          "1": "10 px",
+          "2": "13 px",
+          "3": "16 px",
+          "4": "18 px",
+          "5": "24 px",
+        }[textFormat.size as "1" | "2" | "3" | "4" | "5"],
+        textFormat.bold === true ? "Bold" : null,
+        textFormat.italic === true ? "Italic" : null,
+        textFormat.list === true ? "List" : null,
+        textFormat.link === true ? "Link" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
   const visiblePages = useMemo(() => {
     const query = pageQuery.trim().toLocaleLowerCase();
     if (!query) return notebook.pages;
@@ -1296,7 +1331,7 @@ export function GridnoteEditor() {
             <span className="sr-only">Font</span>
             <select
               aria-label="Font"
-              defaultValue=""
+              value={textFormat.font}
               disabled={selectedBlock?.type !== "rich-text"}
               onChange={(event) => {
                 if (event.target.value) {
@@ -1304,9 +1339,8 @@ export function GridnoteEditor() {
                 }
               }}
             >
-              <option value="" disabled>
-                Font
-              </option>
+              <option value="mixed" disabled>Mixed fonts</option>
+              <option value="system-ui">System</option>
               <option value="Arial">Sans</option>
               <option value="Georgia">Serif</option>
               <option value="Courier New">Mono</option>
@@ -1316,7 +1350,7 @@ export function GridnoteEditor() {
             <span className="sr-only">Text size</span>
             <select
               aria-label="Text size"
-              defaultValue=""
+              value={textFormat.size}
               disabled={selectedBlock?.type !== "rich-text"}
               onChange={(event) => {
                 if (event.target.value) {
@@ -1324,27 +1358,48 @@ export function GridnoteEditor() {
                 }
               }}
             >
-              <option value="" disabled>
-                Size
-              </option>
-              <option value="2">Small</option>
-              <option value="3">Normal</option>
-              <option value="4">Large</option>
-              <option value="5">Title</option>
+              <option value="mixed" disabled>Mixed sizes</option>
+              <option value="1">Small · 10</option>
+              <option value="2">Normal · 13</option>
+              <option value="3">Medium · 16</option>
+              <option value="4">Large · 18</option>
+              <option value="5">Title · 24</option>
             </select>
           </label>
           {toolbar.map((item) => (
             <button
               key={`${item.command}-${item.label}`}
+              className={
+                (item.command === "bold" && textFormat.bold === true) ||
+                (item.command === "italic" && textFormat.italic === true) ||
+                (item.command === "insertUnorderedList" &&
+                  textFormat.list === true) ||
+                (item.command === "formatBlock" &&
+                  textFormat.block === item.value)
+                  ? "active"
+                  : ""
+              }
               disabled={selectedBlock?.type !== "rich-text"}
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => runFormat(item.command, item.value)}
               aria-label={item.label}
+              aria-pressed={
+                item.command === "bold"
+                  ? textFormat.bold === true
+                  : item.command === "italic"
+                    ? textFormat.italic === true
+                    : item.command === "insertUnorderedList"
+                      ? textFormat.list === true
+                      : item.command === "formatBlock"
+                        ? textFormat.block === item.value
+                        : undefined
+              }
             >
               {item.label}
             </button>
           ))}
           <button
+            className={textFormat.link === true ? "active" : ""}
             disabled={selectedBlock?.type !== "rich-text"}
             onPointerDown={(event) => event.preventDefault()}
             onClick={() => {
@@ -1354,6 +1409,14 @@ export function GridnoteEditor() {
           >
             Link
           </button>
+          {selectedBlock?.type === "rich-text" && (
+            <span className={`format-summary ${formatIsMixed ? "mixed" : ""}`}>
+              {textFormat.hasSelection ? "Selection: " : "Current: "}
+              {formatIsMixed
+                ? "mixed formatting"
+                : formatSummary || "Plain text"}
+            </span>
+          )}
           <span className="toolbar-spacer" />
           <button disabled={!selectedBlock} onClick={duplicateSelected}>
             Duplicate
@@ -1467,6 +1530,7 @@ export function GridnoteEditor() {
                         html={block.html}
                         onSave={(html) => saveBlockHtml(block.id, html)}
                         onSelectionChange={rememberTextSelection}
+                        onFormatChange={setTextFormat}
                       />
                     ) : block.type === "image" ? (
                       <div className="image-editor">
