@@ -216,6 +216,7 @@ export function GridnoteEditor() {
   const [status, setStatus] = useState("Ready");
   const [warningMessage, setWarningMessage] = useState("");
   const [phoneMode, setPhoneMode] = useState<"edit" | "pan">("edit");
+  const [pageQuery, setPageQuery] = useState("");
   const [drawColor, setDrawColor] = useState("#556b5d");
   const [drawWidth, setDrawWidth] = useState(3);
   const [drawingStrokeId, setDrawingStrokeId] = useState<string | null>(null);
@@ -431,8 +432,17 @@ export function GridnoteEditor() {
     );
     if (interaction.kind === "move") {
       const candidate = {
-        column: Math.max(0, interaction.startColumn + deltaColumn),
-        row: Math.max(0, interaction.startRow + deltaRow),
+        column: Math.max(
+          0,
+          Math.min(
+            COLUMNS - block.columnSpan,
+            interaction.startColumn + deltaColumn,
+          ),
+        ),
+        row: Math.max(
+          0,
+          Math.min(ROWS - block.rowSpan, interaction.startRow + deltaRow),
+        ),
         columnSpan: block.columnSpan,
         rowSpan: block.rowSpan,
       };
@@ -444,8 +454,17 @@ export function GridnoteEditor() {
       const candidate = {
         column: block.column,
         row: block.row,
-        columnSpan: Math.max(1, interaction.startColumnSpan + deltaColumn),
-        rowSpan: Math.max(1, interaction.startRowSpan + deltaRow),
+        columnSpan: Math.max(
+          1,
+          Math.min(
+            COLUMNS - block.column,
+            interaction.startColumnSpan + deltaColumn,
+          ),
+        ),
+        rowSpan: Math.max(
+          1,
+          Math.min(ROWS - block.row, interaction.startRowSpan + deltaRow),
+        ),
       };
       setGhost({
         ...candidate,
@@ -721,6 +740,64 @@ export function GridnoteEditor() {
       "Page deleted",
     );
     setSelectedId(null);
+  };
+
+  const reorderPage = (pageId: string, direction: -1 | 1) => {
+    const index = notebook.pages.findIndex((page) => page.id === pageId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= notebook.pages.length) return;
+    const pages = [...notebook.pages];
+    [pages[index], pages[target]] = [pages[target], pages[index]];
+    commit({ ...notebook, pages }, "Page order saved");
+  };
+
+  const moveSelectedBlockByKeyboard = (
+    block: GridBlock,
+    deltaColumn: number,
+    deltaRow: number,
+    resize: boolean,
+  ) => {
+    const result = resize
+      ? resizeBlock(
+          block,
+          Math.max(
+            1,
+            Math.min(COLUMNS - block.column, block.columnSpan + deltaColumn),
+          ),
+          Math.max(
+            1,
+            Math.min(ROWS - block.row, block.rowSpan + deltaRow),
+          ),
+          activePage.blocks,
+        )
+      : moveBlock(
+          block,
+          Math.max(
+            0,
+            Math.min(
+              COLUMNS - block.columnSpan,
+              block.column + deltaColumn,
+            ),
+          ),
+          Math.max(
+            0,
+            Math.min(ROWS - block.rowSpan, block.row + deltaRow),
+          ),
+          activePage.blocks,
+        );
+    if (!result.ok) {
+      setStatus("That grid position is occupied");
+      return;
+    }
+    updateActivePage(
+      (page) => ({
+        ...page,
+        blocks: page.blocks.map((item) =>
+          item.id === block.id ? (result.block as GridBlock) : item,
+        ),
+      }),
+      resize ? "Block resized" : "Block moved",
+    );
   };
 
   const exportZip = async () => {
@@ -1188,6 +1265,23 @@ export function GridnoteEditor() {
     ],
     [],
   );
+  const visiblePages = useMemo(() => {
+    const query = pageQuery.trim().toLocaleLowerCase();
+    if (!query) return notebook.pages;
+    return notebook.pages.filter((page) => {
+      const searchable = [
+        page.title,
+        ...page.blocks.map((block) =>
+          block.type === "rich-text"
+            ? block.html.replace(/<[^>]+>/g, " ")
+            : block.type,
+        ),
+      ]
+        .join(" ")
+        .toLocaleLowerCase();
+      return searchable.includes(query);
+    });
+  }, [notebook.pages, pageQuery]);
 
   return (
     <main className="gridnote-shell">
@@ -1219,8 +1313,21 @@ export function GridnoteEditor() {
           />
         </label>
         <div className="sidebar-heading">Pages</div>
+        <label className="page-search">
+          <span className="sr-only">Search pages</span>
+          <input
+            type="search"
+            value={pageQuery}
+            onChange={(event) => setPageQuery(event.target.value)}
+            placeholder="Search pages…"
+          />
+        </label>
         <nav className="page-list" aria-label="Notebook pages">
-          {notebook.pages.map((page) => (
+          {visiblePages.map((page) => {
+            const pageIndex = notebook.pages.findIndex(
+              (item) => item.id === page.id,
+            );
+            return (
             <div
               className={`page-row ${page.id === notebook.activePageId ? "active" : ""}`}
               key={page.id}
@@ -1238,6 +1345,22 @@ export function GridnoteEditor() {
                 <small>{page.blocks.length} blocks</small>
               </button>
               <button
+                className="page-order"
+                onClick={() => reorderPage(page.id, -1)}
+                disabled={pageIndex === 0}
+                aria-label={`Move ${page.title} up`}
+              >
+                ↑
+              </button>
+              <button
+                className="page-order"
+                onClick={() => reorderPage(page.id, 1)}
+                disabled={pageIndex === notebook.pages.length - 1}
+                aria-label={`Move ${page.title} down`}
+              >
+                ↓
+              </button>
+              <button
                 className="page-delete"
                 onClick={() => deletePage(page.id)}
                 aria-label={`Delete ${page.title}`}
@@ -1245,7 +1368,11 @@ export function GridnoteEditor() {
                 ×
               </button>
             </div>
-          ))}
+            );
+          })}
+          {!visiblePages.length && (
+            <p className="page-empty">No matching pages</p>
+          )}
         </nav>
         <button className="new-page-button" onClick={addPage}>
           + New page
@@ -1283,7 +1410,7 @@ export function GridnoteEditor() {
                 onBlur={() => commit({ ...notebookRef.current })}
                 aria-label="Page title"
               />
-              <small>{status}</small>
+              <small role="status" aria-live="polite">{status}</small>
             </div>
           </div>
           <div className="topbar-actions">
@@ -1419,6 +1546,7 @@ export function GridnoteEditor() {
               onPointerUp={onCanvasPointerUp}
               onPointerCancel={onCanvasPointerUp}
               aria-label="Structural note grid"
+              role="application"
             >
               {activePage.blocks.map((block) => {
                 const live =
@@ -1433,10 +1561,40 @@ export function GridnoteEditor() {
                       width: live.columnSpan * CELL,
                       height: live.rowSpan * CELL,
                     }}
+                    tabIndex={phoneMode === "pan" ? -1 : 0}
+                    aria-label={`${block.type} block, ${block.columnSpan} by ${block.rowSpan} cells`}
                     onPointerDown={(event) => {
                       if (phoneMode === "pan") return;
                       event.stopPropagation();
                       setSelectedId(block.id);
+                    }}
+                    onFocus={() => setSelectedId(block.id)}
+                    onKeyDown={(event) => {
+                      if (event.currentTarget !== event.target) return;
+                      const deltas: Record<string, [number, number]> = {
+                        ArrowLeft: [-1, 0],
+                        ArrowRight: [1, 0],
+                        ArrowUp: [0, -1],
+                        ArrowDown: [0, 1],
+                      };
+                      if (
+                        (event.key === "Delete" ||
+                          event.key === "Backspace") &&
+                        selectedId === block.id
+                      ) {
+                        event.preventDefault();
+                        deleteSelected();
+                        return;
+                      }
+                      const delta = deltas[event.key];
+                      if (!delta) return;
+                      event.preventDefault();
+                      moveSelectedBlockByKeyboard(
+                        block,
+                        delta[0],
+                        delta[1],
+                        event.shiftKey,
+                      );
                     }}
                   >
                     <button
