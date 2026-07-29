@@ -46,6 +46,7 @@ import {
   initialNotebook,
   uid,
 } from "@/lib/notebook-model";
+import { RichTextEditor } from "./RichTextEditor";
 
 const { cell: CELL, columns: COLUMNS, rows: ROWS } = GRID;
 
@@ -1461,24 +1462,11 @@ export function GridnoteEditor() {
                       </small>
                     </button>
                     {block.type === "rich-text" ? (
-                      <div
-                        className="rich-editor"
-                        data-editor-id={block.id}
-                        contentEditable
-                        suppressContentEditableWarning
-                        dangerouslySetInnerHTML={{ __html: block.html }}
-                        onBlur={(event) =>
-                          saveBlockHtml(block.id, event.currentTarget.innerHTML)
-                        }
-                        onSelect={(event) =>
-                          rememberTextSelection(event.currentTarget)
-                        }
-                        onKeyUp={(event) =>
-                          rememberTextSelection(event.currentTarget)
-                        }
-                        onPointerUp={(event) =>
-                          rememberTextSelection(event.currentTarget)
-                        }
+                      <RichTextEditor
+                        blockId={block.id}
+                        html={block.html}
+                        onSave={(html) => saveBlockHtml(block.id, html)}
+                        onSelectionChange={rememberTextSelection}
                       />
                     ) : block.type === "image" ? (
                       <div className="image-editor">

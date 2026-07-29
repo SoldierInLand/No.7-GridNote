@@ -526,9 +526,12 @@ select:focus-visible,
   padding: 8px 10px 12px;
   overflow: auto;
   color: #3b4658;
+  cursor: text;
   font-size: 13px;
   line-height: 1.42;
   outline: 0;
+  user-select: text;
+  white-space: normal;
 }
 
 .image-editor {
