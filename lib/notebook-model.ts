@@ -32,7 +32,7 @@ export const initialNotebook: Notebook = {
           row: 2,
           columnSpan: 5,
           rowSpan: 4,
-          html: "<h3>Try it</h3><p>☐ Select this block</p><p>☐ Drag its top handle</p><p>☐ Resize from the corner</p>",
+          html: "<h3>Try it</h3><p>☐ Click text to edit</p><p>☐ Use the small grip to move</p><p>☐ Drag the corner edge to resize</p>",
         },
       ],
     },

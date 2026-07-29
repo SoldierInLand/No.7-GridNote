@@ -292,6 +292,8 @@ export function GridnoteEditor() {
     if (event.button !== 0 || event.target !== canvasRef.current) return;
     const cell = pointToCell(event.clientX, event.clientY);
     setSelectedId(null);
+    setActiveEditorId(null);
+    setTextFormat(emptyTextFormat);
     setSelection(null);
     setInteraction({
       kind: "create",
@@ -1338,37 +1340,48 @@ export function GridnoteEditor() {
           </div>
         </header>
 
-        <div className="formatbar" aria-label="Text formatting">
-          <button onClick={insertTextBlock}>+ Note</button>
-          <button onClick={() => imageInputRef.current?.click()}>+ Image</button>
-          <input
-            ref={imageInputRef}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void insertImage(file);
-              event.currentTarget.value = "";
-            }}
-          />
-          <button onClick={insertTable}>+ Table</button>
-          <button onClick={insertShape}>+ Shape</button>
-          <button onClick={insertDrawing}>+ Draw</button>
-          <button onClick={() => attachmentInputRef.current?.click()}>
-            + File
-          </button>
-          <input
-            ref={attachmentInputRef}
-            type="file"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void insertAttachment(file);
-              event.currentTarget.value = "";
-            }}
-          />
-          <span className="toolbar-divider" />
+        <div
+          className="formatbar"
+          aria-label={activeEditorId ? "Text formatting" : "Add content"}
+        >
+          {!activeEditorId ? (
+            <>
+              <button className="primary-add" onClick={insertTextBlock}>
+                + Note
+              </button>
+              <button onClick={() => imageInputRef.current?.click()}>
+                Image
+              </button>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void insertImage(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <button onClick={insertTable}>Table</button>
+              <button onClick={insertShape}>Shape</button>
+              <button onClick={insertDrawing}>Draw</button>
+              <button onClick={() => attachmentInputRef.current?.click()}>
+                File
+              </button>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void insertAttachment(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </>
+          ) : (
+            <>
           <label className="format-select">
             <span className="sr-only">Font</span>
             <select
@@ -1451,6 +1464,18 @@ export function GridnoteEditor() {
           >
             Link
           </button>
+              <button
+                className="done-editing"
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  (document.activeElement as HTMLElement | null)?.blur();
+                  setActiveEditorId(null);
+                }}
+              >
+                Done
+              </button>
+            </>
+          )}
           <span className="toolbar-spacer" />
           <button disabled={!selectedBlock} onClick={duplicateSelected}>
             Duplicate
