@@ -103,6 +103,7 @@ export function GridnoteEditor() {
   const [pageQuery, setPageQuery] = useState("");
   const [textFormat, setTextFormat] =
     useState<TextFormatState>(emptyTextFormat);
+  const [activeEditorId, setActiveEditorId] = useState<string | null>(null);
   const [drawColor, setDrawColor] = useState("#556b5d");
   const [drawWidth, setDrawWidth] = useState(3);
   const [drawingStrokeId, setDrawingStrokeId] = useState<string | null>(null);
@@ -166,8 +167,13 @@ export function GridnoteEditor() {
   );
 
   useEffect(() => {
-    if (selectedBlock?.type !== "rich-text") {
+    if (
+      selectedBlock?.type !== "rich-text" &&
+      selectedBlock?.type !== "table" &&
+      selectedBlock?.type !== "shape"
+    ) {
       setTextFormat(emptyTextFormat);
+      setActiveEditorId(null);
     }
   }, [selectedBlock?.type]);
   const interactionBlockId =
@@ -573,11 +579,68 @@ export function GridnoteEditor() {
     );
   };
 
+  const saveEditorHtml = (editorId: string, html: string) => {
+    const block = activePage.blocks.find(
+      (item) =>
+        item.id === editorId ||
+        editorId.startsWith(`${item.id}-cell-`) ||
+        editorId === `${item.id}-shape`,
+    );
+    if (!block) return;
+    if (block.type === "rich-text") {
+      saveBlockHtml(block.id, html);
+      return;
+    }
+    if (block.type === "shape") {
+      if (block.text === html) return;
+      updateActivePage(
+        (page) => ({
+          ...page,
+          blocks: page.blocks.map((item) =>
+            item.id === block.id && item.type === "shape"
+              ? { ...item, text: html }
+              : item,
+          ),
+        }),
+        "Shape text saved",
+      );
+      return;
+    }
+    if (block.type === "table") {
+      const match = editorId.match(/-cell-(\d+)-(\d+)$/);
+      if (!match) return;
+      const rowIndex = Number(match[1]);
+      const columnIndex = Number(match[2]);
+      if (block.cells[rowIndex]?.[columnIndex] === html) return;
+      updateActivePage(
+        (page) => ({
+          ...page,
+          blocks: page.blocks.map((item) =>
+            item.id === block.id && item.type === "table"
+              ? {
+                  ...item,
+                  cells: item.cells.map((tableRow, currentRow) =>
+                    tableRow.map((cell, currentColumn) =>
+                      currentRow === rowIndex &&
+                      currentColumn === columnIndex
+                        ? html
+                        : cell,
+                    ),
+                  ),
+                }
+              : item,
+          ),
+        }),
+        "Table text saved",
+      );
+    }
+  };
+
   const runFormat = (command: string, value?: string) => {
     const editor = document.querySelector<HTMLElement>(
-      `[data-editor-id="${selectedId}"]`,
+      `[data-editor-id="${activeEditorId}"]`,
     );
-    if (!editor || !selectedId) return;
+    if (!editor || !activeEditorId) return;
     editor.focus();
     const selection = window.getSelection();
     if (selection && savedRangeRef.current) {
@@ -585,11 +648,12 @@ export function GridnoteEditor() {
       selection.addRange(savedRangeRef.current);
     }
     document.execCommand(command, false, value);
-    saveBlockHtml(selectedId, editor.innerHTML);
+    saveEditorHtml(activeEditorId, editor.innerHTML);
     document.dispatchEvent(new Event("selectionchange"));
   };
 
   const rememberTextSelection = (editor: HTMLElement) => {
+    setActiveEditorId(editor.dataset.editorId ?? null);
     const selection = window.getSelection();
     if (
       selection?.rangeCount &&
@@ -1090,28 +1154,6 @@ export function GridnoteEditor() {
     ],
     [],
   );
-  const formatIsMixed = Object.entries(textFormat).some(
-    ([key, value]) => key !== "hasSelection" && value === "mixed",
-  );
-  const formatSummary = formatIsMixed
-    ? "Selection: mixed formatting"
-    : [
-        textFormat.block !== "p" ? textFormat.block.toUpperCase() : null,
-        textFormat.font === "system-ui" ? "System" : textFormat.font,
-        {
-          "1": "10 px",
-          "2": "13 px",
-          "3": "16 px",
-          "4": "18 px",
-          "5": "24 px",
-        }[textFormat.size as "1" | "2" | "3" | "4" | "5"],
-        textFormat.bold === true ? "Bold" : null,
-        textFormat.italic === true ? "Italic" : null,
-        textFormat.list === true ? "List" : null,
-        textFormat.link === true ? "Link" : null,
-      ]
-        .filter(Boolean)
-        .join(" · ");
   const visiblePages = useMemo(() => {
     const query = pageQuery.trim().toLocaleLowerCase();
     if (!query) return notebook.pages;
@@ -1332,7 +1374,7 @@ export function GridnoteEditor() {
             <select
               aria-label="Font"
               value={textFormat.font}
-              disabled={selectedBlock?.type !== "rich-text"}
+              disabled={!activeEditorId}
               onChange={(event) => {
                 if (event.target.value) {
                   runFormat("fontName", event.target.value);
@@ -1351,7 +1393,7 @@ export function GridnoteEditor() {
             <select
               aria-label="Text size"
               value={textFormat.size}
-              disabled={selectedBlock?.type !== "rich-text"}
+              disabled={!activeEditorId}
               onChange={(event) => {
                 if (event.target.value) {
                   runFormat("fontSize", event.target.value);
@@ -1379,7 +1421,7 @@ export function GridnoteEditor() {
                   ? "active"
                   : ""
               }
-              disabled={selectedBlock?.type !== "rich-text"}
+              disabled={!activeEditorId}
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => runFormat(item.command, item.value)}
               aria-label={item.label}
@@ -1400,7 +1442,7 @@ export function GridnoteEditor() {
           ))}
           <button
             className={textFormat.link === true ? "active" : ""}
-            disabled={selectedBlock?.type !== "rich-text"}
+            disabled={!activeEditorId}
             onPointerDown={(event) => event.preventDefault()}
             onClick={() => {
               const url = window.prompt("Link URL");
@@ -1409,14 +1451,6 @@ export function GridnoteEditor() {
           >
             Link
           </button>
-          {selectedBlock?.type === "rich-text" && (
-            <span className={`format-summary ${formatIsMixed ? "mixed" : ""}`}>
-              {textFormat.hasSelection ? "Selection: " : "Current: "}
-              {formatIsMixed
-                ? "mixed formatting"
-                : formatSummary || "Plain text"}
-            </span>
-          )}
           <span className="toolbar-spacer" />
           <button disabled={!selectedBlock} onClick={duplicateSelected}>
             Duplicate
@@ -1483,6 +1517,10 @@ export function GridnoteEditor() {
                     onPointerDown={(event) => {
                       if (phoneMode === "pan") return;
                       event.stopPropagation();
+                      if (selectedId !== block.id) {
+                        setActiveEditorId(null);
+                        setTextFormat(emptyTextFormat);
+                      }
                       setSelectedId(block.id);
                     }}
                     onFocus={() => setSelectedId(block.id)}
@@ -1584,34 +1622,19 @@ export function GridnoteEditor() {
                               <tr key={rowIndex}>
                                 {row.map((cell, columnIndex) => {
                                   const Cell = rowIndex === 0 ? "th" : "td";
+                                  const editorId = `${block.id}-cell-${rowIndex}-${columnIndex}`;
                                   return (
                                     <Cell key={columnIndex}>
-                                      <input
-                                        value={cell}
-                                        aria-label={`Row ${rowIndex + 1}, column ${columnIndex + 1}`}
-                                        onChange={(event) => {
-                                          const value = event.target.value;
-                                          updateBlockDraft(block.id, (item) => {
-                                            if (item.type !== "table") return item;
-                                            return {
-                                              ...item,
-                                              cells: item.cells.map((tableRow, r) =>
-                                                tableRow.map((entry, c) =>
-                                                  r === rowIndex &&
-                                                  c === columnIndex
-                                                    ? value
-                                                    : entry,
-                                                ),
-                                              ),
-                                            };
-                                          });
-                                        }}
-                                        onBlur={() =>
-                                          commit(
-                                            { ...notebookRef.current },
-                                            "Table saved",
-                                          )
+                                      <RichTextEditor
+                                        blockId={editorId}
+                                        html={cell}
+                                        className="table-cell-editor"
+                                        ariaLabel={`Row ${rowIndex + 1}, column ${columnIndex + 1}`}
+                                        onSave={(html) =>
+                                          saveEditorHtml(editorId, html)
                                         }
+                                        onSelectionChange={rememberTextSelection}
+                                        onFormatChange={setTextFormat}
                                       />
                                     </Cell>
                                   );
@@ -1626,22 +1649,16 @@ export function GridnoteEditor() {
                         className={`shape-editor shape-${block.shape}`}
                         style={{ backgroundColor: block.color }}
                       >
-                        <input
+                        <RichTextEditor
+                          blockId={`${block.id}-shape`}
+                          html={block.text}
                           className="shape-text"
-                          value={block.text}
-                          aria-label="Shape text"
-                          onChange={(event) => {
-                            const text = event.target.value;
-                            updateBlockDraft(block.id, (item) =>
-                              item.type === "shape" ? { ...item, text } : item,
-                            );
-                          }}
-                          onBlur={() =>
-                            commit(
-                              { ...notebookRef.current },
-                              "Shape text saved",
-                            )
+                          ariaLabel="Shape text"
+                          onSave={(html) =>
+                            saveEditorHtml(`${block.id}-shape`, html)
                           }
+                          onSelectionChange={rememberTextSelection}
+                          onFormatChange={setTextFormat}
                         />
                         <div className="shape-controls">
                           <select

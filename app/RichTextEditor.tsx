@@ -29,6 +29,8 @@ export const emptyTextFormat: TextFormatState = {
 type RichTextEditorProps = {
   blockId: string;
   html: string;
+  className?: string;
+  ariaLabel?: string;
   onSave: (html: string) => void;
   onSelectionChange: (editor: HTMLElement) => void;
   onFormatChange: (format: TextFormatState) => void;
@@ -122,6 +124,8 @@ function readFormat(editor: HTMLElement): TextFormatState {
 export function RichTextEditor({
   blockId,
   html,
+  className = "rich-editor",
+  ariaLabel,
   onSave,
   onSelectionChange,
   onFormatChange,
@@ -152,12 +156,14 @@ export function RichTextEditor({
   return (
     <div
       ref={editorRef}
-      className="rich-editor"
+      className={className}
       data-editor-id={blockId}
+      aria-label={ariaLabel}
       contentEditable
       suppressContentEditableWarning
       spellCheck
       onBlur={(event) => onSave(event.currentTarget.innerHTML)}
+      onFocus={(event) => updateSelection(event.currentTarget)}
       onInput={(event) => updateSelection(event.currentTarget)}
       onSelect={(event) => updateSelection(event.currentTarget)}
       onKeyUp={(event) => updateSelection(event.currentTarget)}
